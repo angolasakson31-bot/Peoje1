@@ -36,3 +36,8 @@ birkaç karesini üst üste koyup ekran çizgilenmesini (moiré) temizler.
 - **Üstünden çiz:** Çapraz ya da arkası karışık fotoğraflarda kesiti fotoğrafın üstünden çizip öyle tanıt.
 - **Çapraz çekim:** Tanıma, kesitin döndürülmüş ve bir yönde basık (eğik bakılmış) hallerini de dener.
 - **➕ Yeni profil ekle:** Katalogda olmayan profilin fotoğrafını numarasıyla kaydet; liste, ezber ve tanımaya katılır (telefonda saklanır).
+
+## Fotoğraf öğretme (internetsiz öğrenme)
+- **📸 Öğret:** Tanı sekmesinde fotoğrafı çek, çerçevele, "📸 Öğret"e bas, numarayı yaz. Aynı profilden 2–3 fotoğraf (bir temiz, birkaç normal çekim) öğretmek en iyisi.
+- Yeni çekim, öğretilen fotoğraflarla iki yolla karşılaştırılır: kenar şekli ve HOG görünüm imzası (8 yön).
+- Fotoğraflar telefonda IndexedDB'de saklanır. **Ayarlar → Yedek indir / geri yükle** ile taşınır.

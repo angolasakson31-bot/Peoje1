@@ -45,7 +45,7 @@
       </div>
       <div class="row">
         <button id="matchBtn">🔍 Tanı</button>
-        <button id="addBtn" class="secondary">➕ Yeni profil ekle</button>
+        <button id="addBtn" class="secondary">📸 Öğret</button>
       </div>
       <details class="dbg"><summary>Kenar görüntüsü</summary><canvas id="edgeCanvas"></canvas></details>
     </div>
@@ -119,6 +119,14 @@
     <p>Bütün resimleri telefona indir, atölyede internet olmadan çalışsın.</p>
     <button id="offlineBtn">⬇️ Hepsini indir</button>
     <div id="offlineInfo" class="muted"></div>
+
+    <h2>Yedekleme</h2>
+    <p>Ezber ilerlemen, öğrettiğin fotoğraflar, eklediğin profiller ve notların sadece bu telefonda duruyor. Ara sıra yedek dosyası indir; telefon değişirse ya da tarayıcı verisi silinirse geri yüklersin.</p>
+    <div class="row">
+      <button id="backupBtn">💾 Yedek indir</button>
+      <label class="bigbtn small secondaryLbl">📂 Yedeği geri yükle<input id="restoreIn" type="file" accept=".json,application/json" hidden></label>
+    </div>
+    <div id="backupInfo" class="muted"></div>
 
     <h2>Düzeltmeler</h2>
     <p>Yanlış okunmuş numaraları profil sayfasından düzeltebilirsin. Aşağıdaki listeyi kopyalayıp bana gönderirsen kalıcı olarak düzeltirim.</p>

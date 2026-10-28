@@ -10,7 +10,6 @@ const store = {
 let PROFILES = [];          // {n, h, a, pts:{xy, ob}, lc}
 let BYNUM = new Map();
 let FIX = store.get('fix', {});          // yanlış okunan numara düzeltmeleri: {asıl: yeni}
-let LEARN = store.get('learn', []).filter(s => s.v === 2);  // öğrenilen fotoğraflar: [{v, n, a, p}]
 
 const shownNum = n => FIX[n] || n;
 const picUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : `data/pic/${n}.jpg`; };
@@ -138,7 +137,7 @@ const L = 128;   // kırpılan alanın uzun kenarı (piksel)
 const T = 10;    // uzaklık sınırı (piksel)
 const G = 24;    // kapsama ızgarası
 const NB = 8;    // kenar yönü dilimi (0-180°, 22.5° adım)
-const CFG = { edgeFrac: 0.14, wRecall: 0.6, wAspect: 0.5, wStretch: 0.25, angStep: 6, scales: [0.9, 1.0], squash: [1, 0.75, 0.55], wSquash: 0.1, topK: 120 };
+const CFG = { wLearnCh: 0.5, wHog: 0.8, learnBoost: 1.0, edgeFrac: 0.14, wRecall: 0.6, wAspect: 0.5, wStretch: 0.25, angStep: 6, scales: [0.9, 1.0], squash: [1, 0.75, 0.55], wSquash: 0.1, topK: 120 };
 
 function cropGray() {
   const c = photo.canvas, b = photo.box;
@@ -419,19 +418,150 @@ function rank(Q) {
   const cand = PROFILES.filter(p => p.pts).map(p => ({ p, sc: score(p, true) }));
   cand.sort((a, b) => a.sc - b.sc);
   const res = cand.map((c, i) => ({ n: c.p.n, sc: i < CFG.topK ? score(c.p, false) : c.sc + 0.05, src: c.p.custom ? 'senin eklediğin' : 'çizim' }));
-  // öğrenilen fotoğraflarla karşılaştır (onaylanan eski çekimler)
-  const learned = new Map();
-  for (const s of LEARN) {
-    const pts = decodePts(s.p);
-    let best = 1e9;
-    // profilin öbür ucundan bakılınca görüntü aynalanır; bu yüzden 8 yönün hepsi denenir
-    for (let o = 0; o < 8; o++) for (const ang of angles) best = Math.min(best, scorePlacement(orient(pts, s.a, o, ang - s.ang), Q));
-    best *= 0.85;
-    if (!learned.has(s.n) || learned.get(s.n) > best) learned.set(s.n, best);
-  }
+  // öğretilen fotoğraflarla karşılaştır
+  const learned = learnedScores(Q, angles);
   for (const r of res) if (learned.has(r.n) && learned.get(r.n) < r.sc) { r.sc = learned.get(r.n); r.src = 'senin fotoğrafın'; }
   res.sort((a, b) => a.sc - b.sc);
   return res;
+}
+
+/* ---------------- Öğretilen fotoğraflar ----------------
+   Her profile istediğin kadar fotoğraf öğretilebilir. Yeni çekim iki yolla
+   bu fotoğraflarla karşılaştırılır: kenar şekli (çizimlerle aynı yöntem) ve
+   HOG görünüm imzası (kesitteki kenar yönlerinin bölge bölge dağılımı).
+   Fotoğraflar telefonda IndexedDB'de saklanır; internet gerekmez. */
+let SAMPLES = [];   // {id, n, a, ang, p, pts, hog, thumb, t}
+const idb = {
+  db: null,
+  open() {
+    if (this.db) return Promise.resolve(this.db);
+    return new Promise((ok, no) => {
+      const r = indexedDB.open('profil', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('samples', { keyPath: 'id', autoIncrement: true });
+      r.onsuccess = () => { this.db = r.result; ok(this.db); };
+      r.onerror = () => no(r.error);
+    });
+  },
+  async tx(mode, fn) {
+    const db = await this.open();
+    return new Promise((ok, no) => {
+      const t = db.transaction('samples', mode), st = t.objectStore('samples');
+      const out = fn(st);
+      t.oncomplete = () => ok(out && out.result !== undefined ? out.result : out);
+      t.onerror = () => no(t.error);
+    });
+  },
+  all() { return this.tx('readonly', st => st.getAll()); },
+  put(v) { return this.tx('readwrite', st => st.put(v)); },
+  del(id) { return this.tx('readwrite', st => st.delete(id)); },
+  clear() { return this.tx('readwrite', st => st.clear()); },
+};
+
+async function loadSamples() {
+  try {
+    // eski sürümde localStorage'da duran öğrenmeleri taşı
+    const old = store.get('learn', []).filter(s => s.v === 2);
+    for (const s of old) await idb.put({ n: s.n, a: s.a, ang: s.ang || 0, p: s.p, t: Date.now() });
+    if (old.length) localStorage.removeItem('learn');
+    SAMPLES = (await idb.all()).map(s => ({ ...s, pts: decodePts(s.p) }));
+  } catch (e) { SAMPLES = []; console.error(e); }
+}
+const samplesOf = n => SAMPLES.filter(s => s.n === n);
+
+// HOG: 64x64 gri görüntü, 8x8 hücre, 9 yön dilimi (0-180°)
+const HS = 64, HC = 8, HB = 9;
+function hog(g) {
+  const out = new Float32Array(HC * HC * HB), cs = HS / HC;
+  for (let y = 1; y < HS - 1; y++) for (let x = 1; x < HS - 1; x++) {
+    const i = y * HS + x, gx = g[i + 1] - g[i - 1], gy = g[i + HS] - g[i - HS];
+    const m = Math.hypot(gx, gy);
+    if (!m) continue;
+    const a = ((Math.atan2(gy, gx) * 180 / Math.PI) % 180 + 180) % 180;
+    out[(((y / cs) | 0) * HC + ((x / cs) | 0)) * HB + Math.min(HB - 1, (a / 20) | 0)] += m;
+  }
+  for (let c = 0; c < HC * HC; c++) {   // hücre bazında normalize: ışık farkına dayanıklı
+    let s = 0;
+    for (let b = 0; b < HB; b++) s += out[c * HB + b] ** 2;
+    s = Math.sqrt(s) + 1e-3;
+    for (let b = 0; b < HB; b++) out[c * HB + b] = Math.min(out[c * HB + b] / s, 0.3);
+  }
+  let s = 0;
+  for (const v of out) s += v * v;
+  s = Math.sqrt(s) + 1e-6;
+  for (let i = 0; i < out.length; i++) out[i] /= s;
+  return out;
+}
+// Kırpılan bölgeyi baskın açı kadar düzeltip 64x64 griye çevir
+function deskewGray(src, sx, sy, sw, sh, angDeg) {
+  const t = document.createElement('canvas'); t.width = HS; t.height = HS;
+  const x = t.getContext('2d');
+  x.fillStyle = '#808080'; x.fillRect(0, 0, HS, HS);
+  const s = (HS - 4) / Math.max(sw, sh);
+  x.translate(HS / 2, HS / 2); x.rotate(-angDeg * Math.PI / 180); x.scale(s, s);
+  x.drawImage(src, sx, sy, sw, sh, -sw / 2, -sh / 2, sw, sh);
+  const d = x.getImageData(0, 0, HS, HS).data, g = new Float32Array(HS * HS);
+  for (let i = 0; i < HS * HS; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  return g;
+}
+// 8 yön: 4 döndürme x ayna (görüntü üzerinde)
+function variants(g) {
+  const out = [];
+  for (let o = 0; o < 8; o++) {
+    const rot = o & 3, mir = o >> 2, v = new Float32Array(HS * HS);
+    for (let y = 0; y < HS; y++) for (let x = 0; x < HS; x++) {
+      let u = mir ? HS - 1 - x : x, w = y, X, Y;
+      if (rot === 0) { X = u; Y = w; } else if (rot === 1) { X = HS - 1 - w; Y = u; }
+      else if (rot === 2) { X = HS - 1 - u; Y = HS - 1 - w; } else { X = w; Y = HS - 1 - u; }
+      v[Y * HS + X] = g[y * HS + x];
+    }
+    out.push(hog(v));
+  }
+  return out;
+}
+const cosine = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+
+function cropRect() {
+  const c = photo.canvas;
+  if (trace.strokes.length) {
+    const xs = trace.strokes.flat().map(p => p[0]), ys = trace.strokes.flat().map(p => p[1]);
+    let sx = Math.min(...xs), sy = Math.min(...ys), sw = Math.max(...xs) - sx, sh = Math.max(...ys) - sy;
+    const m = Math.max(sw, sh) * 0.08;
+    return [sx - m, sy - m, sw + 2 * m, sh + 2 * m];
+  }
+  const k = c.width / c.clientWidth, b = photo.box;
+  return [b.x * k, b.y * k, b.w * k, b.h * k];
+}
+// Fotoğraf sorgusuna görünüm imzasını ekle
+function addHog(Q) {
+  const [sx, sy, sw, sh] = cropRect();
+  Q.hogBase = hog(deskewGray(photo.canvas, sx, sy, sw, sh, Q.a0));
+  Q.hog8 = variants(deskewGray(photo.canvas, sx, sy, sw, sh, Q.a0));
+  return Q;
+}
+
+// Öğretilen fotoğraflara göre puan (küçük = benzer)
+function learnedScores(Q, angles) {
+  const best = new Map();
+  for (const s of SAMPLES) {
+    let ch = 1e9;
+    for (let o = 0; o < 8; o++) for (const ang of angles) ch = Math.min(ch, scorePlacement(orient(s.pts, s.a, o, ang - s.ang), Q, true));
+    let sc = ch;
+    if (Q.hog8 && s.hog) {
+      let c = -1;
+      for (const v of Q.hog8) c = Math.max(c, cosine(v, s.hog));
+      sc = CFG.wLearnCh * ch + CFG.wHog * (1 - c);
+    }
+    sc *= CFG.learnBoost;
+    if (!best.has(s.n) || best.get(s.n) > sc) best.set(s.n, sc);
+  }
+  return best;
+}
+
+async function saveSample(n, Q) {
+  const rec = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), hog: Q.hogBase || null, thumb: photo.img ? photoThumb() : null, t: Date.now() };
+  rec.id = await idb.put(rec);
+  SAMPLES.push({ ...rec, pts: decodePts(rec.p) });
+  return samplesOf(n).length;
 }
 
 /* ---------------- Fotoğrafın üstünden çizme ---------------- */
@@ -479,8 +609,8 @@ enableDrawing(trace.canvas, () => trace.strokes, '#facc15', updateTraceUi);
 
 // Tanı: çizim varsa çizimden, yoksa çerçevedeki fotoğraftan
 function currentQuery() {
-  if (trace.strokes.length) return inkQuery(trace.canvas);
-  return analyzeCrop();
+  const Q = trace.strokes.length ? inkQuery(trace.canvas) : analyzeCrop();
+  return Q && addHog(Q);
 }
 
 let lastQuery = null, lastRank = [];
@@ -531,22 +661,21 @@ function mergeCustom() {
   BYNUM = new Map(PROFILES.map(p => [p.n, p]));
   $('#status').textContent = `${PROFILES.length} profil`;
 }
-$('#addBtn').onclick = () => {
+let lastTeach = '';
+$('#addBtn').onclick = async () => {
   if (!photo.img) return;
-  const v = (prompt('Bu profilin numarası:') || '').trim();
+  const v = (prompt('Bu fotoğraf hangi profil? Numarasını yaz:', lastTeach) || '').trim();
   if (!v) return;
+  lastTeach = v;
   if (trace.on) { trace.on = false; updateTraceUi(); }
   const Q = currentQuery();
   if (!Q) { alert('Önce kesiti çiz.'); return; }
   const p = findByShown(v);
-  if (p && !p.custom) {
-    // katalogda var: fotoğrafı o profile öğret
-    lastQuery = Q;
-    confirmMatch(p.n, $('#results'));
-    return;
-  }
-  addCustomProfile(v, Q);
-  $('#results').innerHTML = `<div class="card"><b>✓ ${v} yeni profil olarak eklendi.</b> Listede ve ezberde de var; bir dahaki çekimde tanınacak.</div>`;
+  let msg = '';
+  if (!p) { addCustomProfile(v, Q); msg = ' Katalogda yoktu, yeni profil olarak eklendi.'; }
+  const k = await saveSample(p ? p.n : v, Q);
+  $('#results').innerHTML = `<div class="card"><b>✓ ${v}: ${k}. fotoğraf öğretildi.</b>${msg}<br>
+    Aynı profilden farklı açı ve ışıkta 2–3 fotoğraf öğretirsen en iyi sonucu alırsın. Sıradaki fotoğrafı çekebilirsin.</div>`;
 };
 
 /* ---------------- Sonuç listesi ---------------- */
@@ -583,8 +712,9 @@ function showResults(el, list, ms, fromPhoto) {
     const v = other.querySelector('input').value.trim();
     if (!v) return;
     const p = findByShown(v);
-    if (p && !p.custom) { confirmMatch(p.n, other); return; }
+    if (p) { confirmMatch(p.n, other); return; }
     addCustomProfile(v, lastQuery);
+    saveSample(v, lastQuery);
     other.innerHTML = `<b>✓ ${v} yeni profil olarak eklendi.</b>`;
   };
   el.appendChild(other);
@@ -611,12 +741,10 @@ function findByShown(v) {
   return BYNUM.get(v) || BYNUM.get(v.padStart(4, '0'));
 }
 
-function confirmMatch(n, el) {
+async function confirmMatch(n, el) {
   if (!lastQuery) return;
-  LEARN.push({ v: 2, n, a: lastQuery.a, ang: lastQuery.a0, p: encodePts(lastQuery.sample) });
-  if (LEARN.length > 2000) LEARN.shift();
-  store.set('learn', LEARN);
-  el.innerHTML = `<b>✓ ${shownNum(n)} olarak kaydedildi.</b> Bir dahaki sefere daha iyi tanıyacak.`;
+  const k = await saveSample(n, lastQuery);
+  el.innerHTML = `<b>✓ ${shownNum(n)} olarak kaydedildi</b> (bu profilin ${k}. fotoğrafı). Bir dahaki sefere daha iyi tanıyacak.`;
 }
 
 /* ---------------- Liste ---------------- */
@@ -648,15 +776,25 @@ function renderList() {
 
 function openDetail(n) {
   const p = BYNUM.get(n);
-  const nl = LEARN.filter(s => s.n === n).length;
+  const mine = samplesOf(n);
   $('#detailBody').innerHTML = `
     <div class="bignum">${shownNum(n)}</div>
     ${FIX[n] ? `<p class="muted">Videodan okunan: ${n}</p>` : ''}
     <img class="rowimg" src="${rowUrl(n)}" alt="">
-    <p class="muted">Excel satırının videodan alınmış hali. ${nl ? `Bu profil için ${nl} fotoğrafın kayıtlı.` : ''}</p>
+    <p class="muted">Excel satırının videodan alınmış hali.</p>
+    ${mine.length ? `<p class="muted">Öğrettiğin fotoğraflar (${mine.length}):</p><div class="alikes" id="detMine"></div>` : '<p class="muted">Bu profile henüz fotoğraf öğretmedin. Tanı sekmesinde fotoğrafı çekip "📸 Öğret"e bas.</p>'}
     ${NOTES[n] ? `<p>İpucun: ${NOTES[n]}</p>` : ''}
     ${p && p.h && lookalikes(n, 4).length ? '<p class="muted">Buna en çok benzeyenler:</p><div class="alikes" id="detAlikes"></div>' : ''}
     ${p && p.custom ? '<button id="delCustom" class="danger">Bu eklediğin profili sil</button>' : '<button id="fixBtn" class="secondary">Numara yanlış mı? Düzelt</button>'}`;
+  const dm = $('#detMine');
+  if (dm) for (const sm of mine) {
+    const d = document.createElement('div'); d.className = 'alike';
+    d.innerHTML = `${sm.thumb ? `<img class="pic small" src="${sm.thumb}" alt="">` : '<div class="muted">(resimsiz)</div>'}<button class="secondary mini">Sil</button>`;
+    d.querySelector('button').onclick = async () => {
+      await idb.del(sm.id); SAMPLES = SAMPLES.filter(x => x.id !== sm.id); openDetail(n);
+    };
+    dm.appendChild(d);
+  }
   if (p && p.custom) {
     $('#delCustom').onclick = () => {
       if (!confirm(`${n} silinsin mi?`)) return;
@@ -996,11 +1134,34 @@ function initEzberSettings() {
 /* ---------------- Ayarlar ---------------- */
 function renderMore() {
   $('#fixExport').value = Object.keys(FIX).length ? JSON.stringify(FIX) : 'Henüz düzeltme yok.';
-  const cnt = new Set(LEARN.map(s => s.n)).size;
-  $('#learnInfo').textContent = `${LEARN.length} fotoğraf, ${cnt} farklı profil.`;
+  const cnt = new Set(SAMPLES.map(s => s.n)).size;
+  $('#learnInfo').textContent = `${SAMPLES.length} fotoğraf, ${cnt} farklı profil.`;
   const sk = Object.keys(SKIP);
   $('#skipInfo').textContent = sk.length ? `Resmi bozuk diye atladıkların: ${sk.map(shownNum).join(', ')}` : 'Atladığın profil yok.';
 }
+const BACKUP_KEYS = ['srs', 'ezberSet', 'ezberDay', 'notes', 'fix', 'skip', 'custom'];
+$('#backupBtn').onclick = () => {
+  const data = { app: 'profil-tanima', v: 1, date: new Date().toISOString(), keys: {}, samples: SAMPLES.map(({ pts, hog, ...r }) => ({ ...r, hog: hog ? Array.from(hog, v => +v.toFixed(4)) : null })) };
+  for (const k of BACKUP_KEYS) data.keys[k] = store.get(k, null);
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `profil-yedek-${todayKey()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  $('#backupInfo').textContent = `Yedek indirildi (${(blob.size / 1024 / 1024).toFixed(1)} MB). İndirilenler klasöründe.`;
+};
+$('#restoreIn').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.app !== 'profil-tanima') throw new Error('bu bir profil yedeği değil');
+    if (!confirm(`${data.date.slice(0, 10)} tarihli yedek yüklensin mi? Telefondaki mevcut ilerlemenin yerine geçer.`)) return;
+    for (const k of BACKUP_KEYS) if (data.keys[k] !== null && data.keys[k] !== undefined) store.set(k, data.keys[k]);
+    await idb.clear();
+    for (const r of data.samples || []) { const { id, ...rest } = r; await idb.put({ ...rest, hog: rest.hog ? Float32Array.from(rest.hog) : null }); }
+    $('#backupInfo').textContent = 'Yedek yüklendi, uygulama yeniden açılıyor…';
+    setTimeout(() => location.reload(), 800);
+  } catch (err) { alert('Yedek yüklenemedi: ' + err.message); }
+};
 $('#unskip').onclick = () => { SKIP = {}; store.set('skip', SKIP); renderMore(); };
 $('#copyFix').onclick = async () => {
   try { await navigator.clipboard.writeText($('#fixExport').value); $('#copyFix').textContent = 'Kopyalandı ✓'; }
@@ -1008,7 +1169,7 @@ $('#copyFix').onclick = async () => {
 };
 $('#clearLearn').onclick = () => {
   if (!confirm('Öğrenilen bütün fotoğraflar silinsin mi?')) return;
-  LEARN = []; store.set('learn', LEARN); renderMore();
+  idb.clear().then(() => { SAMPLES = []; renderMore(); });
 };
 $('#offlineBtn').onclick = async () => {
   const urls = PROFILES.flatMap(p => [rowUrl(p.n), ...(p.h ? [picUrl(p.n)] : [])]);
@@ -1031,4 +1192,4 @@ $('#offlineBtn').onclick = async () => {
 
 /* ---------------- Başlat ---------------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-loadData().then(() => { initEzberSettings(); ezHome(); }).catch(e => { $('#status').textContent = 'Veri yüklenemedi'; console.error(e); });
+Promise.all([loadData(), loadSamples()]).then(() => { initEzberSettings(); ezHome(); }).catch(e => { $('#status').textContent = 'Veri yüklenemedi'; console.error(e); });
