@@ -91,3 +91,6 @@ button.okbtn{background:var(--ok)}
 .row input{min-width:0}
 .row .chkBtn{flex:0 0 auto}
 button.skip{width:100%;margin-top:8px}
+#traceCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;touch-action:none}
+#traceBtn.active{background:var(--accent);color:#fff}
+#sketchCanvas{width:100%;aspect-ratio:1;background:#fff;border:2px dashed var(--line);border-radius:12px;touch-action:none;display:block}

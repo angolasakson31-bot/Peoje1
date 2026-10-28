@@ -1,5 +1,5 @@
 // Önce önbellek: uygulama ve profil resimleri bir kez indirildikten sonra internetsiz çalışır.
-const CACHE = 'profil-v2';
+const CACHE = 'profil-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'data/profiles.json', 'data/similar.json'];
 
 self.addEventListener('install', e => {

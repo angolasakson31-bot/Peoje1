@@ -13,8 +13,8 @@ let FIX = store.get('fix', {});          // yanlış okunan numara düzeltmeleri
 let LEARN = store.get('learn', []).filter(s => s.v === 2);  // öğrenilen fotoğraflar: [{v, n, a, p}]
 
 const shownNum = n => FIX[n] || n;
-const picUrl = n => `data/pic/${n}.jpg`;
-const rowUrl = n => `data/row/${n}.jpg`;
+const picUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : `data/pic/${n}.jpg`; };
+const rowUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : `data/row/${n}.jpg`; };
 
 // Noktalar üçlü baytlar halinde: u, v (0-255) ve kenar yön dilimi (0-7)
 function decodePts(b64) {
@@ -40,6 +40,7 @@ async function loadData() {
   PROFILES = j.profiles.map(p => ({ ...p, pts: p.p ? decodePts(p.p) : null }));
   BYNUM = new Map(PROFILES.map(p => [p.n, p]));
   try { SIMILAR = await (await fetch('data/similar.json')).json(); } catch (e) { SIMILAR = {}; }
+  mergeCustom();
   $('#status').textContent = `${PROFILES.length} profil`;
 }
 
@@ -67,6 +68,7 @@ function openPhoto(file) {
     photo.img = img; photo.rot = 0;
     drawPhoto();
     $('#cropWrap').hidden = false;
+    trace.on = false; syncTraceCanvas();
     $('#results').innerHTML = '';
     URL.revokeObjectURL(url);
   };
@@ -93,7 +95,7 @@ function drawPhoto() {
     setBox({ x: (W - side) / 2, y: (H - side) / 2, w: side, h: side });
   });
 }
-$('#rotBtn').onclick = () => { if (photo.img) { photo.rot = (photo.rot + 1) % 4; drawPhoto(); } };
+$('#rotBtn').onclick = () => { if (photo.img) { photo.rot = (photo.rot + 1) % 4; drawPhoto(); syncTraceCanvas(); } };
 
 function setBox(b) {
   const W = photo.canvas.clientWidth, H = photo.canvas.clientHeight;
@@ -136,7 +138,7 @@ const L = 128;   // kırpılan alanın uzun kenarı (piksel)
 const T = 10;    // uzaklık sınırı (piksel)
 const G = 24;    // kapsama ızgarası
 const NB = 8;    // kenar yönü dilimi (0-180°, 22.5° adım)
-const CFG = { edgeFrac: 0.14, wRecall: 0.6, wAspect: 0.5, angStep: 6, scales: [0.9, 1.0] };
+const CFG = { edgeFrac: 0.14, wRecall: 0.6, wAspect: 0.5, wStretch: 0.25, angStep: 6, scales: [0.9, 1.0], squash: [1, 0.75, 0.55], wSquash: 0.1, topK: 120 };
 
 function cropGray() {
   const c = photo.canvas, b = photo.box;
@@ -250,7 +252,7 @@ function orientedDT(e, dir, W, H) {
 }
 
 // 8 yön (4 döndürme x ayna) + ince açı; noktalar ve yön dilimleri birlikte dönüşür
-function orient(pts, a, o, ang = 0) {
+function orient(pts, a, o, ang = 0, q = 1) {
   // pts: {xy:[u,v,...] 0..1, ob:[dilim]} ; a = genişlik/yükseklik
   const bw = a >= 1 ? 1 : a, bh = a >= 1 ? 1 / a : 1;
   const xy = pts.xy, n = pts.ob.length;
@@ -270,6 +272,8 @@ function orient(pts, a, o, ang = 0) {
     ob[j] = ((k + (rot & 1) * 4 + shift) % NB + NB) % NB;
   }
   if (rot & 1) { W = bh; H = bw; }
+  // q < 1: çapraz bakınca kesit bir eksende basık görünür
+  if (q !== 1) { for (let i = 1; i < out.length; i += 2) out[i] *= q; H *= q; }
   if (!ang) return { p: out, ob, W, H };
   const c = Math.cos(ang * Math.PI / 180), s = Math.sin(ang * Math.PI / 180);
   let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
@@ -283,20 +287,26 @@ function orient(pts, a, o, ang = 0) {
 }
 
 const mark = new Uint8Array(G * G);
-function scorePlacement(P, Q) {
+// Çizimi kırpılan alana yerleştirip puanla (küçük = daha benzer).
+// İki yerleştirme denenir: oranı koruyarak sığdırma ve kutuya esnetme
+// (yandan/çapraz çekilen profilde kesit bir yönde basık görünür).
+function scorePlacement(P, Q, fast = false) {
   const { W, H, odt, cells, nCells } = Q;
   const s0 = Math.min(W / P.W, H / P.H);
   const ap = Math.abs(Math.log((P.W / P.H) / (W / H)));
   const n = P.ob.length;
+  const fits = fast ? [[s0 * 0.95, s0 * 0.95, CFG.wAspect * ap]] : CFG.scales.map(f => [s0 * f, s0 * f, CFG.wAspect * ap]);
+  const sx = W / P.W * 0.95, sy = H / P.H * 0.95;
+  if (!fast) fits.push([sx, sy, CFG.wStretch * Math.abs(Math.log(sx / sy))]);
   let best = 1e9;
-  for (const f of CFG.scales) {
-    const s = s0 * f, ow = P.W * s, oh = P.H * s;
-    for (const [ox, oy] of [[0, 0], [-3, 0], [3, 0], [0, -3], [0, 3]]) {
+  for (const [kx, ky, pen] of fits) {
+    const ow = P.W * kx, oh = P.H * ky;
+    for (const [ox, oy] of fast ? [[0, 0]] : [[0, 0], [-3, 0], [3, 0], [0, -3], [0, 3]]) {
       const x0 = (W - ow) / 2 + ox, y0 = (H - oh) / 2 + oy;
       let sum = 0;
       mark.fill(0);
       for (let j = 0; j < n; j++) {
-        const x = Math.round(x0 + P.p[2 * j] * s), y = Math.round(y0 + P.p[2 * j + 1] * s);
+        const x = Math.round(x0 + P.p[2 * j] * kx), y = Math.round(y0 + P.p[2 * j + 1] * ky);
         if (x < 0 || y < 0 || x >= W || y >= H) { sum += T; continue; }
         sum += odt[P.ob[j]][y * W + x];
         mark[Math.min(G - 1, (y * G / H) | 0) * G + Math.min(G - 1, (x * G / W) | 0)] = 1;
@@ -315,16 +325,15 @@ function scorePlacement(P, Q) {
       }
       const fwd = sum / n / T;
       const recall = nCells ? cov / nCells : 0;
-      const sc = fwd + CFG.wRecall * (1 - recall) + CFG.wAspect * ap;
+      const sc = fwd + CFG.wRecall * (1 - recall) + pen;
       if (sc < best) best = sc;
     }
   }
   return best;
 }
 
-function analyzeCrop() {
-  const { g, W, H } = cropGray();
-  const { e, dir, angle } = edges(g, W, H);
+// Kenar haritasından sorgu: yön dilimli uzaklık haritaları, kapsama ızgarası, öğrenme örneği
+function buildQuery(e, dir, angle, W, H) {
   const odt = orientedDT(e, dir, W, H);
   const cells = new Uint8Array(G * G); let nCells = 0;
   const idx = [];
@@ -333,7 +342,6 @@ function analyzeCrop() {
     if (!cells[c]) { cells[c] = 1; nCells++; }
     idx.push(y * W + x);
   }
-  // kenar görüntüsünü göster
   const ec = $('#edgeCanvas'); ec.width = W; ec.height = H;
   const ectx = ec.getContext('2d'), im = ectx.createImageData(W, H);
   for (let i = 0; i < W * H; i++) { const v = e[i] ? 255 : 0; im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255; }
@@ -345,23 +353,72 @@ function analyzeCrop() {
     const i = idx[k];
     xy.push((i % W) / W, ((i / W) | 0) / H); ob.push(dir[i]);
   }
-  return { W, H, odt, cells, nCells, sample: { xy, ob }, a: W / H, angle };
+  return { W, H, odt, cells, nCells, sample: { xy, ob }, a: W / H, angle, a0: angle > 45 ? angle - 90 : angle };
+}
+
+function analyzeCrop() {
+  const { g, W, H } = cropGray();
+  const { e, dir, angle } = edges(g, W, H);
+  return buildQuery(e, dir, angle, W, H);
+}
+
+// Elle çizilen çizgilerden sorgu: çizgi pikselleri katalog çizimleri gibi nokta olur,
+// yönleri bulanıklaştırılmış çizginin eğiminden gelir (katalogla aynı yöntem).
+function inkQuery(srcCanvas, box) {
+  const c = srcCanvas, ctx0 = c.getContext('2d');
+  const d0 = ctx0.getImageData(0, 0, c.width, c.height).data;
+  let minx = 1e9, miny = 1e9, maxx = -1, maxy = -1;
+  const x1 = box ? box.x1 : c.width, y1 = box ? box.y1 : c.height;
+  for (let y = box ? box.y0 : 0; y < y1; y++) for (let x = box ? box.x0 : 0; x < x1; x++) {
+    if (d0[(y * c.width + x) * 4 + 3] > 60) { if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; }
+  }
+  if (maxx < 0) return null;
+  const sw = maxx - minx + 1, sh = maxy - miny + 1;
+  const s = (L - 6) / Math.max(sw, sh);
+  const W = Math.max(8, Math.round(sw * s) + 6), H = Math.max(8, Math.round(sh * s) + 6);
+  const t = document.createElement('canvas'); t.width = W; t.height = H;
+  const ctx = t.getContext('2d');
+  ctx.drawImage(c, minx, miny, sw, sh, 3, 3, W - 6, H - 6);
+  const d = ctx.getImageData(0, 0, W, H).data;
+  const ink = new Float32Array(W * H), e = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) { ink[i] = d[i * 4 + 3] > 60 ? 255 : 0; e[i] = ink[i] ? 1 : 0; }
+  const b = blur(blur(ink, W, H), W, H);
+  const dir = new Uint8Array(W * H), hist = new Float32Array(90);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    const gx = -b[i - W - 1] - 2 * b[i - 1] - b[i + W - 1] + b[i - W + 1] + 2 * b[i + 1] + b[i + W + 1];
+    const gy = -b[i - W - 1] - 2 * b[i - W] - b[i - W + 1] + b[i + W - 1] + 2 * b[i + W] + b[i + W + 1];
+    const a = Math.atan2(gy, gx) * 180 / Math.PI;
+    dir[i] = Math.floor(((a % 180) + 180) % 180 / 22.5) % NB;
+    if (e[i]) hist[Math.floor(((a % 90) + 90) % 90) % 90] += Math.hypot(gx, gy);
+  }
+  let best = 0, angle = 0;
+  for (let k = 0; k < 90; k++) {
+    let s2 = 0;
+    for (let q = -3; q <= 3; q++) s2 += hist[(k + q + 90) % 90];
+    if (s2 > best) { best = s2; angle = k; }
+  }
+  return buildQuery(e, dir, angle, W, H);
 }
 
 function rank(Q) {
-  const res = [];
-  // fotoğraftaki baskın açıya göre çizimi döndürerek dene (eğik tutulan profiller için)
+  // fotoğraftaki baskın açıya göre çizimi döndürerek dene (çapraz tutulan profiller için)
   const a0 = Q.a0 = Q.angle > 45 ? Q.angle - 90 : Q.angle;
-  const st = CFG.angStep, angles = Math.abs(a0) < 4 ? [0, -st, st] : [a0, a0 - st, a0 + st];
-  for (const p of PROFILES) {
-    if (!p.pts) continue;
+  const st = CFG.angStep, base = Math.abs(a0) < 4 ? 0 : a0;
+  const angles = [base, base - st, base + st, base - 2 * st, base + 2 * st];
+  const score = (p, fast) => {
     let best = 1e9;
-    for (let o = 0; o < 8; o++) for (const ang of angles) {
-      const sc = scorePlacement(orient(p.pts, p.a, o, ang), Q);
+    const angs = fast ? [base] : angles, qs = fast ? [1, 0.65] : CFG.squash;
+    for (let o = 0; o < 8; o++) for (const ang of angs) for (const q of qs) {
+      const sc = scorePlacement(orient(p.pts, p.a, o, ang - (p.ang || 0), q), Q, fast) + CFG.wSquash * (1 - q);
       if (sc < best) best = sc;
     }
-    res.push({ n: p.n, sc: best, src: 'çizim' });
-  }
+    return best;
+  };
+  // 1. aşama: hepsini kaba ara; 2. aşama: en iyi adayları ayrıntılı ara
+  const cand = PROFILES.filter(p => p.pts).map(p => ({ p, sc: score(p, true) }));
+  cand.sort((a, b) => a.sc - b.sc);
+  const res = cand.map((c, i) => ({ n: c.p.n, sc: i < CFG.topK ? score(c.p, false) : c.sc + 0.05, src: c.p.custom ? 'senin eklediğin' : 'çizim' }));
   // öğrenilen fotoğraflarla karşılaştır (onaylanan eski çekimler)
   const learned = new Map();
   for (const s of LEARN) {
@@ -377,55 +434,177 @@ function rank(Q) {
   return res;
 }
 
-let lastQuery = null, lastRank = [], shownCount = 10;
+/* ---------------- Fotoğrafın üstünden çizme ---------------- */
+const trace = { on: false, canvas: $('#traceCanvas'), strokes: [] };
+function syncTraceCanvas() {
+  trace.canvas.width = photo.canvas.width; trace.canvas.height = photo.canvas.height;
+  trace.strokes = []; redrawStrokes(trace.canvas, trace.strokes, '#facc15');
+  updateTraceUi();
+}
+function updateTraceUi() {
+  $('#traceBtn').textContent = trace.on ? '✓ Çizimi bitir' : '✏️ Üstünden çiz';
+  $('#traceBtn').classList.toggle('active', trace.on);
+  trace.canvas.style.pointerEvents = trace.on ? 'auto' : 'none';
+  $('#cropBox').style.display = trace.on ? 'none' : '';
+  $('#traceTools').hidden = !trace.on && !trace.strokes.length;
+  $('#traceHint').hidden = !trace.on;
+}
+$('#traceBtn').onclick = () => { trace.on = !trace.on; updateTraceUi(); };
+$('#traceUndo').onclick = () => { trace.strokes.pop(); redrawStrokes(trace.canvas, trace.strokes, '#facc15'); updateTraceUi(); };
+$('#traceClear').onclick = () => { trace.strokes = []; redrawStrokes(trace.canvas, trace.strokes, '#facc15'); updateTraceUi(); };
+
+function redrawStrokes(c, strokes, color) {
+  const x = c.getContext('2d');
+  x.clearRect(0, 0, c.width, c.height);
+  x.strokeStyle = color; x.lineCap = 'round'; x.lineJoin = 'round';
+  x.lineWidth = Math.max(c.width, c.height) * 0.012;
+  for (const s of strokes) {
+    x.beginPath();
+    s.forEach(([px, py], i) => i ? x.lineTo(px, py) : x.moveTo(px, py));
+    if (s.length === 1) x.lineTo(s[0][0] + 0.1, s[0][1]);
+    x.stroke();
+  }
+}
+
+// Parmakla çizim (hem fotoğraf üstü hem çizim sayfası)
+function enableDrawing(c, strokes, color, onChange) {
+  let cur = null;
+  const pos = e => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height]; };
+  c.addEventListener('pointerdown', e => { e.preventDefault(); c.setPointerCapture(e.pointerId); cur = [pos(e)]; strokes().push(cur); redrawStrokes(c, strokes(), color); });
+  c.addEventListener('pointermove', e => { if (!cur) return; cur.push(pos(e)); redrawStrokes(c, strokes(), color); });
+  const end = () => { if (cur) { cur = null; onChange && onChange(); } };
+  c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
+}
+enableDrawing(trace.canvas, () => trace.strokes, '#facc15', updateTraceUi);
+
+// Tanı: çizim varsa çizimden, yoksa çerçevedeki fotoğraftan
+function currentQuery() {
+  if (trace.strokes.length) return inkQuery(trace.canvas);
+  return analyzeCrop();
+}
+
+let lastQuery = null, lastRank = [];
 $('#matchBtn').onclick = () => {
   if (!photo.img || !PROFILES.length) return;
-  $('#results').innerHTML = '<p class="muted">Karşılaştırılıyor…</p>';
+  if (trace.on) { trace.on = false; updateTraceUi(); }
+  $('#results').innerHTML = '<p class="muted">Karşılaştırılıyor… (birkaç saniye sürebilir)</p>';
   setTimeout(() => {
     const t0 = performance.now();
-    const Q = analyzeCrop();
+    const Q = currentQuery();
+    if (!Q) { $('#results').innerHTML = '<p class="muted">Önce kesiti çiz.</p>'; return; }
     lastQuery = Q;
-    const r = rank(Q);
-    lastRank = r;
-    showResults(performance.now() - t0);
+    lastRank = rank(Q);
+    showResults($('#results'), lastRank, performance.now() - t0, true);
   }, 30);
 };
 
-function showResults(ms) {
-  const el = $('#results');
-  shownCount = 10;
-  el.innerHTML = `<p class="muted">En çok benzeyenler (${Math.round(ms)} ms). Doğru olana "✓ Bu" de, uygulama öğrensin.</p><div id="resList"></div>`;
-  renderResults();
+/* ---------------- Yeni profil ekleme ---------------- */
+let CUSTOM = store.get('custom', []);   // [{n, a, ang, p, thumb}]
+function photoThumb() {
+  // çizim varsa çizimin sınırları, yoksa sarı çerçeve
+  const c = photo.canvas;
+  let sx, sy, sw, sh;
+  if (trace.strokes.length) {
+    const xs = trace.strokes.flat().map(p => p[0]), ys = trace.strokes.flat().map(p => p[1]);
+    sx = Math.min(...xs); sy = Math.min(...ys); sw = Math.max(...xs) - sx; sh = Math.max(...ys) - sy;
+    const m = Math.max(sw, sh) * 0.08; sx -= m; sy -= m; sw += 2 * m; sh += 2 * m;
+  } else {
+    const k = c.width / c.clientWidth, b = photo.box;
+    sx = b.x * k; sy = b.y * k; sw = b.w * k; sh = b.h * k;
+  }
+  const s = 220 / Math.max(sw, sh), t = document.createElement('canvas');
+  t.width = Math.max(1, Math.round(sw * s)); t.height = Math.max(1, Math.round(sh * s));
+  t.getContext('2d').drawImage(c, sx, sy, sw, sh, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', 0.72);
+}
+function addCustomProfile(n, Q) {
+  const entry = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), thumb: photoThumb() };
+  CUSTOM = CUSTOM.filter(c => c.n !== n);
+  CUSTOM.push(entry);
+  store.set('custom', CUSTOM);
+  mergeCustom();
+}
+function mergeCustom() {
+  PROFILES = PROFILES.filter(p => !p.custom);
+  for (const c of CUSTOM) if (!BYNUM.has(c.n) || BYNUM.get(c.n).custom)
+    PROFILES.push({ n: c.n, h: 1, custom: 1, a: c.a, ang: c.ang, pts: decodePts(c.p), thumb: c.thumb });
+  BYNUM = new Map(PROFILES.map(p => [p.n, p]));
+  $('#status').textContent = `${PROFILES.length} profil`;
+}
+$('#addBtn').onclick = () => {
+  if (!photo.img) return;
+  const v = (prompt('Bu profilin numarası:') || '').trim();
+  if (!v) return;
+  if (trace.on) { trace.on = false; updateTraceUi(); }
+  const Q = currentQuery();
+  if (!Q) { alert('Önce kesiti çiz.'); return; }
+  const p = findByShown(v);
+  if (p && !p.custom) {
+    // katalogda var: fotoğrafı o profile öğret
+    lastQuery = Q;
+    confirmMatch(p.n, $('#results'));
+    return;
+  }
+  addCustomProfile(v, Q);
+  $('#results').innerHTML = `<div class="card"><b>✓ ${v} yeni profil olarak eklendi.</b> Listede ve ezberde de var; bir dahaki çekimde tanınacak.</div>`;
+};
+
+/* ---------------- Sonuç listesi ---------------- */
+function showResults(el, list, ms, fromPhoto) {
+  let shown = 0;
+  el.innerHTML = `<p class="muted">En çok benzeyenler (${Math.round(ms)} ms).${fromPhoto ? ' Doğru olana "✓ Bu" de, uygulama öğrensin.' : ' Dokunarak ayrıntısını aç.'}</p><div class="resList"></div>`;
+  const box = el.querySelector('.resList');
   const more = document.createElement('button');
   more.className = 'secondary wide'; more.textContent = 'Daha fazla göster';
-  more.onclick = () => { shownCount += 10; renderResults(); };
+  const render = () => {
+    const end = Math.min(shown + 10, list.length);
+    for (; shown < end; shown++) {
+      const r = list[shown];
+      const d = document.createElement('div');
+      d.className = 'card res';
+      d.innerHTML = `<span class="rk">${shown + 1}</span><img class="pic" src="${picUrl(r.n)}" alt="">
+        <div><div class="num">${shownNum(r.n)}</div><div class="sc">benzerlik ${(Math.max(0, 1 - r.sc) * 100).toFixed(0)}%${r.src !== 'çizim' ? ' · ' + r.src : ''}</div></div>
+        ${fromPhoto ? '<button>✓ Bu</button>' : ''}`;
+      d.querySelector('img').onclick = e => { e.stopPropagation(); openDetail(r.n); };
+      if (fromPhoto) d.querySelector('button').onclick = () => confirmMatch(r.n, d);
+      else d.onclick = () => openDetail(r.n);
+      box.appendChild(d);
+    }
+    more.hidden = shown >= list.length;
+  };
+  render();
+  more.onclick = render;
   el.appendChild(more);
+  if (!fromPhoto) return;
   const other = document.createElement('div');
   other.className = 'card';
   other.innerHTML = `<div class="row"><input type="search" inputmode="numeric" placeholder="Listede yoksa numarayı yaz"><button class="secondary">Kaydet</button></div>`;
   other.querySelector('button').onclick = () => {
     const v = other.querySelector('input').value.trim();
+    if (!v) return;
     const p = findByShown(v);
-    if (!p) { alert('Bu numara listede yok.'); return; }
-    confirmMatch(p.n, other);
+    if (p && !p.custom) { confirmMatch(p.n, other); return; }
+    addCustomProfile(v, lastQuery);
+    other.innerHTML = `<b>✓ ${v} yeni profil olarak eklendi.</b>`;
   };
   el.appendChild(other);
 }
 
-function renderResults() {
-  const list = $('#resList');
-  for (let k = list.children.length; k < Math.min(shownCount, lastRank.length); k++) {
-    const r = lastRank[k];
-    const d = document.createElement('div');
-    d.className = 'card res';
-    d.innerHTML = `<span class="rk">${k + 1}</span><img class="pic" src="${picUrl(r.n)}" alt="">
-      <div><div class="num">${shownNum(r.n)}</div><div class="sc">benzerlik ${(Math.max(0, 1 - r.sc) * 100).toFixed(0)}%${r.src !== 'çizim' ? ' · ' + r.src : ''}</div></div>
-      <button>✓ Bu</button>`;
-    d.querySelector('img').onclick = () => openDetail(r.n);
-    d.querySelector('button').onclick = () => confirmMatch(r.n, d);
-    list.appendChild(d);
-  }
-}
+/* ---------------- Elle çizerek arama ---------------- */
+const sketch = { canvas: $('#sketchCanvas'), strokes: [] };
+enableDrawing(sketch.canvas, () => sketch.strokes, '#111827');
+$('#sketchUndo').onclick = () => { sketch.strokes.pop(); redrawStrokes(sketch.canvas, sketch.strokes, '#111827'); };
+$('#sketchClear').onclick = () => { sketch.strokes = []; redrawStrokes(sketch.canvas, sketch.strokes, '#111827'); $('#sketchResults').innerHTML = ''; };
+$('#sketchBtn').onclick = () => {
+  if (!sketch.strokes.length || !PROFILES.length) return;
+  $('#sketchResults').innerHTML = '<p class="muted">Karşılaştırılıyor…</p>';
+  setTimeout(() => {
+    const t0 = performance.now();
+    const Q = inkQuery(sketch.canvas);
+    showResults($('#sketchResults'), rank(Q), performance.now() - t0, false);
+    $('#sketchResults').scrollIntoView({ behavior: 'smooth' });
+  }, 30);
+};
 
 function findByShown(v) {
   for (const p of PROFILES) if (shownNum(p.n) === v) return p;
@@ -477,7 +656,16 @@ function openDetail(n) {
     <p class="muted">Excel satırının videodan alınmış hali. ${nl ? `Bu profil için ${nl} fotoğrafın kayıtlı.` : ''}</p>
     ${NOTES[n] ? `<p>İpucun: ${NOTES[n]}</p>` : ''}
     ${p && p.h && lookalikes(n, 4).length ? '<p class="muted">Buna en çok benzeyenler:</p><div class="alikes" id="detAlikes"></div>' : ''}
-    <button id="fixBtn" class="secondary">Numara yanlış mı? Düzelt</button>`;
+    ${p && p.custom ? '<button id="delCustom" class="danger">Bu eklediğin profili sil</button>' : '<button id="fixBtn" class="secondary">Numara yanlış mı? Düzelt</button>'}`;
+  if (p && p.custom) {
+    $('#delCustom').onclick = () => {
+      if (!confirm(`${n} silinsin mi?`)) return;
+      CUSTOM = CUSTOM.filter(c => c.n !== n); store.set('custom', CUSTOM); mergeCustom();
+      $('#detail').close(); renderList();
+    };
+    if (!$('#detail').open) $('#detail').showModal();
+    return;
+  }
   const da = $('#detAlikes');
   if (da) for (const m of lookalikes(n, 4)) {
     const d = document.createElement('div'); d.className = 'alike';

@@ -31,15 +31,37 @@
     <div id="cropWrap" hidden>
       <div id="cropStage">
         <canvas id="photoCanvas"></canvas>
+        <canvas id="traceCanvas"></canvas>
         <div id="cropBox"><span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span></div>
+      </div>
+      <p id="traceHint" class="hint" hidden>Parmağınla kesitin dış hatlarını ve duvarlarını fotoğrafın üstünden çiz. Çapraz ya da arkası karışık fotoğraflarda en iyi sonucu bu verir.</p>
+      <div id="traceTools" class="row" hidden>
+        <button id="traceUndo" class="secondary">↶ Geri al</button>
+        <button id="traceClear" class="secondary">✕ Çizimi sil</button>
       </div>
       <div class="row">
         <button id="rotBtn" class="secondary">↻ Döndür</button>
+        <button id="traceBtn" class="secondary">✏️ Üstünden çiz</button>
+      </div>
+      <div class="row">
         <button id="matchBtn">🔍 Tanı</button>
+        <button id="addBtn" class="secondary">➕ Yeni profil ekle</button>
       </div>
       <details class="dbg"><summary>Kenar görüntüsü</summary><canvas id="edgeCanvas"></canvas></details>
     </div>
     <div id="results"></div>
+  </section>
+
+  <!-- ÇİZ -->
+  <section id="view-draw" class="view">
+    <p class="hint">Profilin kesitini (yandan görünüşünü) parmağınla çiz, <b>Ara</b>'ya bas. En çok benzeyen profiller numaralarıyla sıralanır. Kabaca çizmen yeter; döndürülmüş ya da ters çizilmiş olması sorun değil.</p>
+    <canvas id="sketchCanvas" width="600" height="600"></canvas>
+    <div class="row">
+      <button id="sketchUndo" class="secondary">↶ Geri al</button>
+      <button id="sketchClear" class="secondary">✕ Temizle</button>
+      <button id="sketchBtn">🔍 Ara</button>
+    </div>
+    <div id="sketchResults"></div>
   </section>
 
   <!-- EZBER -->
@@ -115,6 +137,7 @@
 
 <nav>
   <button data-view="camera" class="active">📷<span>Tanı</span></button>
+  <button data-view="draw">✏️<span>Çiz</span></button>
   <button data-view="quiz">🧠<span>Ezber</span></button>
   <button data-view="list">📋<span>Liste</span></button>
   <button data-view="more">⚙️<span>Ayarlar</span></button>
