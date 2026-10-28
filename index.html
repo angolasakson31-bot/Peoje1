@@ -19,7 +19,7 @@
 <main>
   <!-- KAMERA -->
   <section id="view-camera" class="view active">
-    <p class="hint">Profilin ucunu <b>tam karşıdan</b> çek. Sonra çerçeveyi kesitin etrafına daralt.</p>
+    <p class="hint">Profilin ucunu <b>tam karşıdan</b> çek. Sonra sarı çerçeveyi kesitin etrafına daralt ve <b>Tanı</b>'ya bas; en çok benzeyen profiller numaralarıyla sıralanır.</p>
     <label class="bigbtn">
       📷 Fotoğraf çek
       <input id="camInput" type="file" accept="image/*" capture="environment" hidden>
@@ -44,17 +44,43 @@
 
   <!-- EZBER -->
   <section id="view-quiz" class="view">
-    <div class="row wrap">
-      <select id="quizMode">
-        <option value="pic2num">Resim → numara seç</option>
-        <option value="num2pic">Numara → resim seç</option>
-        <option value="type">Resim → numara yaz</option>
-      </select>
-      <select id="quizRange">
-        <option value="all">Bütün profiller</option>
-      </select>
+    <div id="ezHome">
+      <div id="ezStats" class="stats"></div>
+      <p id="ezToday" class="muted"></p>
+      <button id="ezStart" class="bigbtn">▶ Bugünkü çalışmaya başla</button>
+      <div class="row">
+        <button id="ezPractice" class="secondary">⚡ Hızlı tekrar</button>
+        <button id="ezWeak" class="secondary">🔁 Zayıflarım</button>
+      </div>
+      <details class="card">
+        <summary><b>Ezber ayarları</b></summary>
+        <label>Günde kaç yeni profil
+          <select id="ezNew"><option>5</option><option>10</option><option>15</option><option>20</option><option>30</option><option>50</option></select>
+        </label>
+        <label>Cevap şekli
+          <select id="ezAnswer">
+            <option value="type">Numarayı yazarak (en kalıcısı)</option>
+            <option value="choice">4 şıktan seçerek (başlangıç için)</option>
+            <option value="self">Kendim değerlendiririm</option>
+          </select>
+        </label>
+        <label>Yeni profillerin sırası
+          <select id="ezOrder"><option value="num">Numara sırasıyla</option><option value="random">Karışık</option></select>
+        </label>
+        <label>Hangi profiller
+          <select id="ezRange"><option value="all">Hepsi</option></select>
+        </label>
+        <label class="chk"><input id="ezRotate" type="checkbox"> Resmi rastgele döndür / ters çevir (gerçekteki gibi)</label>
+      </details>
+      <details class="card">
+        <summary><b>Nasıl çalışıyor?</b></summary>
+        <p>Her gün seçtiğin sayıda <b>yeni profil</b> tanıtılır ve hemen sorulur. Bildiklerin giderek daha seyrek
+        (1 gün, 3 gün, 1 hafta, 1 ay…), unuttukların hemen tekrar sorulur. Bu "aralıklı tekrar" yöntemi
+        ezberin kalıcı olması için en etkili yoldur. Günde 10–15 dakika yeter; her gün çalışmak uzun ve seyrek çalışmaktan iyidir.</p>
+        <p>Cevabı <b>yazarak</b> vermek, şıktan seçmekten daha kalıcıdır. Hızlı ve doğru bilirsen profil daha uzun süre sorulmaz; yavaş bilirsen daha erken tekrar gelir.
+        Şıklar ve "karıştırma" listesi, şekli en çok benzeyen profillerden seçilir.</p>
+      </details>
     </div>
-    <div id="quizStats" class="muted"></div>
     <div id="quizCard"></div>
   </section>
 
@@ -76,6 +102,10 @@
     <p>Yanlış okunmuş numaraları profil sayfasından düzeltebilirsin. Aşağıdaki listeyi kopyalayıp bana gönderirsen kalıcı olarak düzeltirim.</p>
     <textarea id="fixExport" readonly rows="5"></textarea>
     <button id="copyFix" class="secondary">Kopyala</button>
+
+    <h2>Atlanan profiller</h2>
+    <p id="skipInfo" class="muted"></p>
+    <button id="unskip" class="secondary">Hepsini ezbere geri al</button>
 
     <h2>Öğrenilen fotoğraflar</h2>
     <p id="learnInfo" class="muted"></p>

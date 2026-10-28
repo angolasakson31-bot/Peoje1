@@ -79,7 +79,7 @@ for n in sorted(info, key=lambda s: (int(s), s)):
         pic = row.crop((max(x0 - pad, 0), max(y0 - pad, 0), min(x1 + pad, row.width), min(y1 + pad, row.height)))
         pic.save(os.path.join(dest, f'pic/{n}.jpg'), quality=82)
     mpath = os.path.join(work, f'out/draw/{n}.png')
-    if v['hasDrawing'] and not os.path.exists(mpath):
+    if v['hasDrawing'] and (not v['box'] or not os.path.exists(mpath)):
         # maske yoksa çizim sütununu satır resminden eşikle
         g = np.asarray(row).astype(np.float32)
         xa = v['numBox'][3] + 12
@@ -97,7 +97,10 @@ for n in sorted(info, key=lambda s: (int(s), s)):
             v['hasDrawing'] = False
             entry['h'] = 0
     if v['hasDrawing']:
-        m = clean(np.asarray(Image.open(mpath)) < 128)
+        raw = np.asarray(Image.open(mpath)) < 128
+        m = clean(raw)
+        # netlik puanı: lekelerden arınmış çizimin ham maskeye oranı (düşükse resim bulanık)
+        entry['q'] = round(float(m.sum()) / max(int(raw.sum()), 1), 2)
         h, w = m.shape
         # her noktanın kenar yönü (çizginin normali, 0-180° arası 8 dilim)
         blur = np.asarray(Image.fromarray((m * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5))).astype(np.float32)

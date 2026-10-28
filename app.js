@@ -11,7 +11,6 @@ let PROFILES = [];          // {n, h, a, pts:{xy, ob}, lc}
 let BYNUM = new Map();
 let FIX = store.get('fix', {});          // yanlış okunan numara düzeltmeleri: {asıl: yeni}
 let LEARN = store.get('learn', []).filter(s => s.v === 2);  // öğrenilen fotoğraflar: [{v, n, a, p}]
-let QUIZ = store.get('quiz', {});        // ezber kutuları: {n: {b, t}}
 
 const shownNum = n => FIX[n] || n;
 const picUrl = n => `data/pic/${n}.jpg`;
@@ -40,6 +39,7 @@ async function loadData() {
   const j = await r.json();
   PROFILES = j.profiles.map(p => ({ ...p, pts: p.p ? decodePts(p.p) : null }));
   BYNUM = new Map(PROFILES.map(p => [p.n, p]));
+  try { SIMILAR = await (await fetch('data/similar.json')).json(); } catch (e) { SIMILAR = {}; }
   $('#status').textContent = `${PROFILES.length} profil`;
 }
 
@@ -49,7 +49,7 @@ function showView(v) {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   if (v === 'list') renderList();
-  if (v === 'quiz' && !$('#quizCard').innerHTML) nextQuestion();
+  if (v === 'quiz' && !$('#quizCard').innerHTML) ezHome();
   if (v === 'more') renderMore();
 }
 
@@ -377,7 +377,7 @@ function rank(Q) {
   return res;
 }
 
-let lastQuery = null;
+let lastQuery = null, lastRank = [], shownCount = 10;
 $('#matchBtn').onclick = () => {
   if (!photo.img || !PROFILES.length) return;
   $('#results').innerHTML = '<p class="muted">Karşılaştırılıyor…</p>';
@@ -386,23 +386,20 @@ $('#matchBtn').onclick = () => {
     const Q = analyzeCrop();
     lastQuery = Q;
     const r = rank(Q);
-    showResults(r.slice(0, 5), performance.now() - t0);
+    lastRank = r;
+    showResults(performance.now() - t0);
   }, 30);
 };
 
-function showResults(top, ms) {
+function showResults(ms) {
   const el = $('#results');
-  el.innerHTML = `<p class="muted">En yakın 5 aday (${Math.round(ms)} ms). Doğru olana dokun, uygulama öğrensin.</p>`;
-  for (const r of top) {
-    const d = document.createElement('div');
-    d.className = 'card res';
-    d.innerHTML = `<img class="pic" src="${picUrl(r.n)}" alt="">
-      <div><div class="num">${shownNum(r.n)}</div><div class="sc">benzerlik ${(Math.max(0, 1 - r.sc) * 100).toFixed(0)}% · ${r.src}</div></div>
-      <button>✓ Bu</button>`;
-    d.querySelector('img').onclick = () => openDetail(r.n);
-    d.querySelector('button').onclick = () => confirmMatch(r.n, d);
-    el.appendChild(d);
-  }
+  shownCount = 10;
+  el.innerHTML = `<p class="muted">En çok benzeyenler (${Math.round(ms)} ms). Doğru olana "✓ Bu" de, uygulama öğrensin.</p><div id="resList"></div>`;
+  renderResults();
+  const more = document.createElement('button');
+  more.className = 'secondary wide'; more.textContent = 'Daha fazla göster';
+  more.onclick = () => { shownCount += 10; renderResults(); };
+  el.appendChild(more);
   const other = document.createElement('div');
   other.className = 'card';
   other.innerHTML = `<div class="row"><input type="search" inputmode="numeric" placeholder="Listede yoksa numarayı yaz"><button class="secondary">Kaydet</button></div>`;
@@ -413,6 +410,21 @@ function showResults(top, ms) {
     confirmMatch(p.n, other);
   };
   el.appendChild(other);
+}
+
+function renderResults() {
+  const list = $('#resList');
+  for (let k = list.children.length; k < Math.min(shownCount, lastRank.length); k++) {
+    const r = lastRank[k];
+    const d = document.createElement('div');
+    d.className = 'card res';
+    d.innerHTML = `<span class="rk">${k + 1}</span><img class="pic" src="${picUrl(r.n)}" alt="">
+      <div><div class="num">${shownNum(r.n)}</div><div class="sc">benzerlik ${(Math.max(0, 1 - r.sc) * 100).toFixed(0)}%${r.src !== 'çizim' ? ' · ' + r.src : ''}</div></div>
+      <button>✓ Bu</button>`;
+    d.querySelector('img').onclick = () => openDetail(r.n);
+    d.querySelector('button').onclick = () => confirmMatch(r.n, d);
+    list.appendChild(d);
+  }
 }
 
 function findByShown(v) {
@@ -463,7 +475,16 @@ function openDetail(n) {
     ${FIX[n] ? `<p class="muted">Videodan okunan: ${n}</p>` : ''}
     <img class="rowimg" src="${rowUrl(n)}" alt="">
     <p class="muted">Excel satırının videodan alınmış hali. ${nl ? `Bu profil için ${nl} fotoğrafın kayıtlı.` : ''}</p>
+    ${NOTES[n] ? `<p>İpucun: ${NOTES[n]}</p>` : ''}
+    ${p && p.h && lookalikes(n, 4).length ? '<p class="muted">Buna en çok benzeyenler:</p><div class="alikes" id="detAlikes"></div>' : ''}
     <button id="fixBtn" class="secondary">Numara yanlış mı? Düzelt</button>`;
+  const da = $('#detAlikes');
+  if (da) for (const m of lookalikes(n, 4)) {
+    const d = document.createElement('div'); d.className = 'alike';
+    d.appendChild(picCanvas(m, 0, 'pic small')); d.insertAdjacentHTML('beforeend', `<b>${shownNum(m)}</b>`);
+    d.onclick = () => openDetail(m);
+    da.appendChild(d);
+  }
   $('#fixBtn').onclick = () => {
     const v = prompt('Doğru numara:', shownNum(n));
     if (v === null) return;
@@ -475,110 +496,313 @@ function openDetail(n) {
   if (!$('#detail').open) $('#detail').showModal();
 }
 
-/* ---------------- Ezber ---------------- */
-const quizPool = () => {
-  const r = $('#quizRange').value;
-  return PROFILES.filter(p => p.h && (r === 'all' || shownNum(p.n).padStart(4, '0').startsWith(r)));
-};
-$('#quizMode').onchange = nextQuestion;
-$('#quizRange').onchange = nextQuestion;
+/* ---------------- Ezber ----------------
+   Amaç: kesilmiş profilin ucuna bakınca numarasını hemen söyleyebilmek.
+   - Aralıklı tekrar (SM-2 benzeri): bilinenler seyrek, unutulanlar sık gelir.
+   - Her gün ayarlanabilir sayıda yeni profil; önce tanıtım, sonra hemen sorma.
+   - Resim rastgele döndürülüp aynalanır (parça elde her yönden gelebilir).
+   - Şıklar şekilce en çok benzeyen profillerden seçilir (ayırt etmeyi öğretir).
+   - Cevap süresi ölçülür; yavaş bilinenler daha erken tekrar edilir. */
+const MIN = 60000, DAY = 86400000;
+const STEPS = [1 * MIN, 10 * MIN];     // öğrenme adımları
+let SRS = store.get('srs', {});        // {n: {st, step, ivl, ease, due, reps, lapses, ms}}
+let EZ = Object.assign({ newPerDay: 10, answer: 'type', rotate: true, order: 'num', range: 'all' }, store.get('ezberSet', {}));
+let NOTES = store.get('notes', {});
+let TODAY = store.get('ezberDay', {});
+let SIMILAR = {};
 
-function fillRanges() {
-  const groups = new Map();
-  for (const p of PROFILES) if (p.h) { const k = shownNum(p.n).padStart(4, '0')[0]; groups.set(k, (groups.get(k) || 0) + 1); }
-  const sel = $('#quizRange');
-  for (const [k, c] of [...groups].sort()) {
-    const o = document.createElement('option');
-    o.value = k; o.textContent = `${k}000 – ${k}999 (${c} profil)`;
-    sel.appendChild(o);
+const todayKey = () => new Date().toLocaleDateString('sv');
+function today() {
+  if (TODAY.date !== todayKey()) {
+    const prev = TODAY.date;
+    const yest = new Date(Date.now() - DAY).toLocaleDateString('sv');
+    TODAY = { date: todayKey(), newDone: 0, extra: 0, done: 0, ok: 0, streak: prev === yest && TODAY.done ? (TODAY.streak || 0) : (prev === todayKey() ? TODAY.streak : 0) };
+    store.set('ezberDay', TODAY);
   }
+  return TODAY;
+}
+const endOfToday = () => { const d = new Date(); d.setHours(23, 59, 59, 999); return d.getTime(); };
+const saveSrs = () => store.set('srs', SRS);
+let SKIP = store.get('skip', {});      // kullanıcının 'resim bozuk' dediği profiller
+const studyPool = () => PROFILES.filter(p => p.h && !SKIP[p.n]);
+
+function newCandidates() {
+  const r = EZ.range;
+  let list = studyPool().filter(p => !SRS[p.n] && (r === 'all' || shownNum(p.n).padStart(4, '0')[0] === r));
+  if (EZ.order === 'random') {
+    // her gün aynı karışık sıra (sayfa yenilense de değişmesin)
+    const seed = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return h; };
+    list = list.map(p => [seed(p.n + todayKey()), p]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+  }
+  // resmi bulanık olanlar en sona
+  return [...list.filter(p => (p.q ?? 1) >= 0.4), ...list.filter(p => (p.q ?? 1) < 0.4)];
 }
 
-function pickQuestion(pool) {
+function counts() {
+  const now = Date.now(), eod = endOfToday();
+  let learn = 0, due = 0, known = 0, seen = 0;
+  for (const p of studyPool()) {
+    const s = SRS[p.n]; if (!s) continue;
+    seen++;
+    if (s.st === 'learn') learn++;
+    else if (s.due <= eod) due++;
+    if (s.st === 'review' && s.ivl >= 21) known++;
+  }
+  const t = today();
+  const newLeft = Math.max(0, Math.min(EZ.newPerDay + t.extra - t.newDone, newCandidates().length));
+  return { learn, due, newLeft, known, seen, total: studyPool().length };
+}
+
+let lastShown = null;
+function nextCard() {
+  const now = Date.now(), eod = endOfToday();
+  const items = studyPool().map(p => [p, SRS[p.n]]).filter(([, s]) => s);
+  const pick = arr => arr.find(([p]) => p.n !== lastShown) || arr[0];
+  const learnDue = items.filter(([, s]) => s.st === 'learn' && s.due <= now).sort((a, b) => a[1].due - b[1].due);
+  if (learnDue.length) return { p: pick(learnDue)[0] };
+  const revDue = items.filter(([, s]) => s.st === 'review' && s.due <= eod).sort((a, b) => a[1].due - b[1].due);
+  if (revDue.length) return { p: pick(revDue)[0] };
+  const t = today();
+  if (t.newDone < EZ.newPerDay + t.extra) {
+    const c = newCandidates();
+    if (c.length) return { p: c[0], isNew: true };
+  }
+  const learnLater = items.filter(([, s]) => s.st === 'learn').sort((a, b) => a[1].due - b[1].due);
+  if (learnLater.length) return { p: pick(learnLater)[0] };
+  return null;
+}
+
+// grade: 0 bilemedi, 1 zor, 2 iyi, 3 kolay
+function schedule(n, g, ms) {
   const now = Date.now();
-  // Leitner: düşük kutudakiler (bilinmeyenler) daha sık gelir
-  const w = pool.map(p => {
-    const s = QUIZ[p.n];
-    if (!s) return 1;
-    const age = (now - s.t) / 60000;
-    return Math.pow(0.35, s.b) * (age < 1 ? 0.1 : 1) + 0.02;
-  });
-  let r = Math.random() * w.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < pool.length; i++) { r -= w[i]; if (r <= 0) return pool[i]; }
-  return pool[pool.length - 1];
+  const s = SRS[n] || { st: 'learn', step: 0, ivl: 0, ease: 2.5, due: now, reps: 0, lapses: 0, ms: 0 };
+  s.reps++;
+  if (ms) s.ms = s.ms ? Math.round(s.ms * 0.6 + ms * 0.4) : ms;
+  if (s.st === 'learn') {
+    if (g === 0) { s.step = 0; s.due = now + STEPS[0]; }
+    else if (g === 1) { s.due = now + STEPS[s.step]; }
+    else if (g === 2 && s.step + 1 < STEPS.length) { s.step++; s.due = now + STEPS[s.step]; }
+    else { s.st = 'review'; s.ivl = Math.max(s.ivl || 0, g === 3 ? 4 : 1); s.due = now + s.ivl * DAY; }
+  } else {
+    if (g === 0) {
+      s.lapses++; s.ease = Math.max(1.3, s.ease - 0.2);
+      s.st = 'learn'; s.step = 0; s.ivl = Math.max(1, Math.round(s.ivl * 0.3)); s.due = now + STEPS[0];
+    } else {
+      if (g === 1) { s.ivl = Math.max(s.ivl + 1, s.ivl * 1.2); s.ease = Math.max(1.3, s.ease - 0.15); }
+      if (g === 2) s.ivl = Math.max(s.ivl + 1, s.ivl * s.ease);
+      if (g === 3) { s.ivl = Math.max(s.ivl + 2, s.ivl * s.ease * 1.3); s.ease += 0.15; }
+      s.ivl = Math.min(365, s.ivl);
+      s.due = now + s.ivl * DAY * (0.95 + Math.random() * 0.1);
+    }
+  }
+  SRS[n] = s; saveSrs();
 }
 
-function distractors(p, pool, k) {
-  const near = pool.filter(q => q.n !== p.n && shownNum(q.n).slice(0, 2) === shownNum(p.n).slice(0, 2));
-  const rest = pool.filter(q => q.n !== p.n);
-  const out = new Set();
-  const src = near.length >= k ? near : rest;
-  while (out.size < Math.min(k, src.length)) out.add(src[Math.floor(Math.random() * src.length)]);
-  return [...out];
+// Profil resmini döndürülmüş / aynalanmış olarak çiz (o: 0-7)
+function picCanvas(n, o, cls = 'pic') {
+  const c = document.createElement('canvas');
+  c.className = cls;
+  const img = new Image();
+  img.onload = () => {
+    const rot = o & 3, mir = o >> 2, w = img.naturalWidth, h = img.naturalHeight;
+    c.width = rot & 1 ? h : w; c.height = rot & 1 ? w : h;
+    const x = c.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    x.translate(c.width / 2, c.height / 2); x.rotate(rot * Math.PI / 2); if (mir) x.scale(-1, 1);
+    x.drawImage(img, -w / 2, -h / 2);
+  };
+  img.src = picUrl(n);
+  return c;
+}
+
+function lookalikes(n, k) {
+  const list = (SIMILAR[n] || []).filter(m => BYNUM.get(m) && BYNUM.get(m).h);
+  return list.slice(0, k);
+}
+
+function choiceOptions(p) {
+  const opts = new Set(lookalikes(p.n, 3));
+  const pool = studyPool();
+  while (opts.size < 3) { const q = pool[Math.floor(Math.random() * pool.length)]; if (q.n !== p.n) opts.add(q.n); }
+  return shuffle([p.n, ...opts]);
 }
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
-function grade(n, ok) {
-  const s = QUIZ[n] || { b: 0, t: 0 };
-  s.b = ok ? Math.min(5, s.b + 1) : 0; s.t = Date.now();
-  QUIZ[n] = s; store.set('quiz', QUIZ);
-  renderQuizStats();
+/* --- ekranlar --- */
+let mode = 'srs';   // srs | practice | weak
+function ezHome() {
+  const c = counts(), t = today();
+  $('#quizCard').innerHTML = '';
+  $('#ezHome').hidden = false;
+  $('#ezStats').innerHTML = `
+    <div class="stat"><b>${c.learn + c.due}</b><span>tekrar bekliyor</span></div>
+    <div class="stat"><b>${c.newLeft}</b><span>yeni (bugün)</span></div>
+    <div class="stat"><b>${c.known}</b><span>kalıcı öğrenildi</span></div>
+    <div class="stat"><b>${c.seen}/${c.total}</b><span>görülen</span></div>`;
+  $('#ezToday').textContent = t.done ? `Bugün ${t.done} soru, %${Math.round(100 * t.ok / t.done)} doğru.${t.streak ? ` ${t.streak + 1}. gün üst üste 🔥` : ''}` : (t.streak ? `${t.streak} gündür üst üste çalışıyorsun 🔥` : '');
+  $('#ezStart').textContent = c.learn + c.due + c.newLeft ? '▶ Bugünkü çalışmaya başla' : '✓ Bugünlük bitti — 5 yeni profil daha ekle';
 }
 
-function renderQuizStats() {
-  const pool = quizPool();
-  const learned = pool.filter(p => (QUIZ[p.n] || {}).b >= 3).length;
-  $('#quizStats').textContent = `Öğrenilen: ${learned} / ${pool.length}`;
+$('#ezStart').onclick = () => {
+  const c = counts();
+  if (!(c.learn + c.due + c.newLeft)) { today().extra += 5; store.set('ezberDay', TODAY); }
+  mode = 'srs'; startSession();
+};
+$('#ezPractice').onclick = () => { mode = 'practice'; startSession(); };
+$('#ezWeak').onclick = () => { mode = 'weak'; startSession(); };
+
+function startSession() { $('#ezHome').hidden = true; showNext(); }
+
+function practicePick() {
+  let pool = studyPool().filter(p => SRS[p.n]);
+  if (mode === 'weak') pool = pool.filter(p => SRS[p.n].lapses >= 1 || SRS[p.n].ms > 6000);
+  if (!pool.length) return null;
+  // zayıf olanlar (çok unutulan, yavaş bilinen) daha sık
+  const w = pool.map(p => 1 + SRS[p.n].lapses * 2 + Math.min(4, (SRS[p.n].ms || 0) / 3000));
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < pool.length; i++) { r -= w[i]; if (r <= 0 && pool[i].n !== lastShown) return pool[i]; }
+  return pool[0];
 }
 
-function nextQuestion() {
-  const pool = quizPool();
+function showNext() {
+  let next;
+  if (mode === 'srs') next = nextCard();
+  else { const p = practicePick(); next = p && { p }; }
+  if (!next) {
+    $('#quizCard').innerHTML = `<div class="card center"><div class="bignum">🎉</div>
+      <p>${mode === 'srs' ? 'Bugünkü çalışma bitti. Yarın tekrar gel; unutmaya başladıklarını o zaman soracağım.' : 'Henüz çalıştığın profil yok. Önce günlük çalışmaya başla.'}</p>
+      <button id="ezBack">Ana ekrana dön</button></div>`;
+    $('#ezBack').onclick = ezHome;
+    return;
+  }
+  lastShown = next.p.n;
+  if (next.isNew) introduce(next.p); else ask(next.p);
+}
+
+function introduce(p) {
   const card = $('#quizCard');
-  renderQuizStats();
-  if (pool.length < 4) { card.innerHTML = '<p>Yeterli profil yok.</p>'; return; }
-  const p = pickQuestion(pool), mode = $('#quizMode').value;
+  card.innerHTML = `<div class="card">
+      <div class="tag">YENİ PROFİL</div>
+      <div class="bignum">${shownNum(p.n)}</div>
+      <div class="introPic"></div>
+      <p class="muted">Elinde şöyle de görebilirsin:</p>
+      <div class="variants"></div>
+      <p class="muted">Bunlarla karıştırma:</p>
+      <div class="alikes"></div>
+      <p class="muted">Excel'deki satırı:</p><img class="rowimg" src="${rowUrl(p.n)}" alt="">
+      <label class="muted">Hafıza ipucun (isteğe bağlı): <input class="note" type="text" placeholder="ör. 'iki dişli tarak, 91 ile başlar'" value="${(NOTES[p.n] || '').replace(/"/g, '&quot;')}"></label>
+      <button class="go">Tamam, sor bakalım</button>
+      <button class="secondary skip">Resim bozuk, bu profili atla</button>
+      <button class="secondary back">Ana ekran</button></div>`;
+  card.querySelector('.skip').onclick = () => { SKIP[p.n] = 1; store.set('skip', SKIP); showNext(); };
+  card.querySelector('.introPic').appendChild(picCanvas(p.n, 0, 'pic big'));
+  for (const o of [1, 2, 4, 3]) card.querySelector('.variants').appendChild(picCanvas(p.n, o, 'pic small'));
+  for (const m of lookalikes(p.n, 3)) {
+    const d = document.createElement('div'); d.className = 'alike';
+    d.appendChild(picCanvas(m, 0, 'pic small')); d.insertAdjacentHTML('beforeend', `<b>${shownNum(m)}</b>`);
+    card.querySelector('.alikes').appendChild(d);
+  }
+  card.querySelector('.go').onclick = () => {
+    const note = card.querySelector('.note').value.trim();
+    if (note) NOTES[p.n] = note; else delete NOTES[p.n];
+    store.set('notes', NOTES);
+    today().newDone++; store.set('ezberDay', TODAY);
+    SRS[p.n] = { st: 'learn', step: 0, ivl: 0, ease: 2.5, due: Date.now(), reps: 0, lapses: 0, ms: 0 }; saveSrs();
+    lastShown = null;   // tanıttıktan hemen sonra bir kez sor
+    ask(p);
+  };
+  card.querySelector('.back').onclick = ezHome;
+}
+
+function ask(p) {
+  const card = $('#quizCard');
+  const o = EZ.rotate ? Math.floor(Math.random() * 8) : 0;
   const answer = shownNum(p.n);
-  const after = ok => {
-    grade(p.n, ok);
+  const t0 = performance.now();
+  card.innerHTML = `<div class="card">
+      <div class="qhead"><span class="muted">${mode === 'srs' ? 'Bu hangi profil?' : mode === 'weak' ? 'Zayıfların' : 'Hızlı tekrar'}</span><span class="timer">0.0 sn</span></div>
+      <div class="qpic"></div>
+      <div class="feedback"></div>
+      <div class="answer"></div>
+      <button class="secondary back">Ana ekran</button></div>`;
+  card.querySelector('.qpic').appendChild(picCanvas(p.n, o, 'pic big'));
+  card.querySelector('.back').onclick = () => { clearInterval(tm); ezHome(); };
+  const timer = card.querySelector('.timer');
+  const tm = setInterval(() => { timer.textContent = ((performance.now() - t0) / 1000).toFixed(1) + ' sn'; }, 100);
+  const box = card.querySelector('.answer');
+
+  const finish = (ok, given, selfGrade) => {
+    clearInterval(tm);
+    const ms = performance.now() - t0;
+    const g = selfGrade !== undefined ? selfGrade : !ok ? 0 : ms < 3500 ? 3 : ms < 9000 ? 2 : 1;
+    if (mode === 'srs') schedule(p.n, g, ms);
+    else if (!ok) { const s = SRS[p.n]; if (s) { s.lapses++; s.due = Math.min(s.due, Date.now()); saveSrs(); } }
+    const t = today(); t.done++; if (ok) t.ok++; store.set('ezberDay', TODAY);
     const fb = card.querySelector('.feedback');
     fb.className = 'feedback ' + (ok ? 'ok' : 'bad');
-    fb.textContent = ok ? '✓ Doğru!' : `✗ Doğrusu: ${answer}`;
-    setTimeout(nextQuestion, ok ? 900 : 2200);
+    fb.innerHTML = ok ? `✓ ${answer} <small>(${(ms / 1000).toFixed(1)} sn${g === 1 ? ' — biraz yavaş' : ''})</small>` : `✗ Doğrusu: <b>${answer}</b>`;
+    box.innerHTML = '';
+    if (NOTES[p.n]) box.insertAdjacentHTML('beforeend', `<p class="muted">İpucun: ${NOTES[p.n]}</p>`);
+    const gp = given && findByShown(given);
+    if (!ok && gp && gp.h) {
+      // yanlış cevabın resmi ile yan yana: farkı gör
+      box.insertAdjacentHTML('beforeend', '<div class="compare"><div><b>' + answer + '</b> (bu)</div><div><b>' + shownNum(gp.n) + '</b> (senin dediğin)</div></div>');
+      const cmp = box.querySelector('.compare');
+      cmp.children[0].prepend(picCanvas(p.n, 0, 'pic small'));
+      cmp.children[1].prepend(picCanvas(gp.n, 0, 'pic small'));
+    }
+    const nb = document.createElement('button'); nb.textContent = 'Devam →'; nb.className = 'go';
+    nb.onclick = showNext; box.appendChild(nb);
+    if (ok) setTimeout(() => { if (nb.isConnected) showNext(); }, 1300);
   };
-  if (mode === 'pic2num') {
-    const opts = shuffle([p, ...distractors(p, pool, 3)]);
-    card.innerHTML = `<img class="pic" src="${picUrl(p.n)}" alt=""><div class="feedback"></div><div class="opts"></div>`;
-    for (const o of opts) {
-      const b = document.createElement('button'); b.textContent = shownNum(o.n);
+
+  if (EZ.answer === 'choice') {
+    const opts = document.createElement('div'); opts.className = 'opts';
+    for (const n of choiceOptions(p)) {
+      const b = document.createElement('button'); b.textContent = shownNum(n);
       b.onclick = () => {
-        card.querySelectorAll('.opts button').forEach(x => { x.disabled = true; if (x.textContent === answer) x.classList.add('ok'); });
-        if (o.n !== p.n) b.classList.add('bad');
-        after(o.n === p.n);
+        opts.querySelectorAll('button').forEach(x => { x.disabled = true; if (x.textContent === answer) x.classList.add('ok'); });
+        if (n !== p.n) b.classList.add('bad');
+        finish(n === p.n, shownNum(n));
       };
-      card.querySelector('.opts').appendChild(b);
+      opts.appendChild(b);
     }
-  } else if (mode === 'num2pic') {
-    const opts = shuffle([p, ...distractors(p, pool, 3)]);
-    card.innerHTML = `<div class="bignum">${answer}</div><div class="feedback"></div><div class="opts"></div>`;
-    for (const o of opts) {
-      const b = document.createElement('button'); b.className = 'picopt';
-      b.innerHTML = `<img src="${picUrl(o.n)}" alt="">`;
-      b.onclick = () => {
-        card.querySelectorAll('.opts button').forEach((x, i) => { x.disabled = true; if (opts[i].n === p.n) x.classList.add('ok'); });
-        if (o.n !== p.n) b.classList.add('bad');
-        after(o.n === p.n);
-      };
-      card.querySelector('.opts').appendChild(b);
-    }
+    box.appendChild(opts);
+  } else if (EZ.answer === 'self') {
+    const b = document.createElement('button'); b.textContent = 'Cevabı göster'; b.className = 'go';
+    b.onclick = () => {
+      clearInterval(tm);
+      box.innerHTML = `<div class="bignum">${answer}</div><div class="grades">
+        <button data-g="0" class="danger">Bilemedim</button><button data-g="1" class="secondary">Zor</button>
+        <button data-g="2">Bildim</button><button data-g="3" class="okbtn">Kolay</button></div>`;
+      box.querySelectorAll('[data-g]').forEach(x => x.onclick = () => finish(+x.dataset.g > 0, null, +x.dataset.g));
+    };
+    box.appendChild(b);
   } else {
-    card.innerHTML = `<img class="pic" src="${picUrl(p.n)}" alt=""><div class="feedback"></div>
-      <div class="row"><input type="search" inputmode="numeric" placeholder="Numara"><button>Kontrol</button></div>`;
-    const inp = card.querySelector('input');
-    const check = () => { if (inp.disabled) return; inp.disabled = true; after(inp.value.trim().replace(/^0+/, '') === answer.replace(/^0+/, '')); };
-    card.querySelector('button').onclick = check;
+    box.innerHTML = `<div class="row"><input class="numIn" type="text" inputmode="numeric" autocomplete="off" placeholder="Numara"><button class="chkBtn">Kontrol</button></div>
+      <button class="secondary idk">Bilmiyorum</button>`;
+    const inp = box.querySelector('input');
+    const norm = v => v.trim().replace(/^0+/, '');
+    const check = () => { if (inp.disabled) return; inp.disabled = true; const v = inp.value.trim(); finish(!!v && norm(v) === norm(answer), v); };
+    box.querySelector(".chkBtn").onclick = check;
+    box.querySelector('.idk').onclick = () => { inp.value = ''; check(); };
     inp.onkeydown = e => { if (e.key === 'Enter') check(); };
-    inp.focus();
+    setTimeout(() => inp.focus(), 50);
   }
+}
+
+/* --- ezber ayarları --- */
+function initEzberSettings() {
+  const groups = new Map();
+  for (const p of studyPool()) { const k = shownNum(p.n).padStart(4, '0')[0]; groups.set(k, (groups.get(k) || 0) + 1); }
+  const sel = $('#ezRange');
+  for (const [k, c] of [...groups].sort()) sel.insertAdjacentHTML('beforeend', `<option value="${k}">${k}000 – ${k}999 (${c})</option>`);
+  for (const [id, key] of [['#ezNew', 'newPerDay'], ['#ezAnswer', 'answer'], ['#ezOrder', 'order'], ['#ezRange', 'range']]) {
+    const el = $(id); el.value = String(EZ[key]);
+    el.onchange = () => { EZ[key] = key === 'newPerDay' ? +el.value : el.value; store.set('ezberSet', EZ); ezHome(); };
+  }
+  $('#ezRotate').checked = EZ.rotate;
+  $('#ezRotate').onchange = () => { EZ.rotate = $('#ezRotate').checked; store.set('ezberSet', EZ); };
 }
 
 /* ---------------- Ayarlar ---------------- */
@@ -586,7 +810,10 @@ function renderMore() {
   $('#fixExport').value = Object.keys(FIX).length ? JSON.stringify(FIX) : 'Henüz düzeltme yok.';
   const cnt = new Set(LEARN.map(s => s.n)).size;
   $('#learnInfo').textContent = `${LEARN.length} fotoğraf, ${cnt} farklı profil.`;
+  const sk = Object.keys(SKIP);
+  $('#skipInfo').textContent = sk.length ? `Resmi bozuk diye atladıkların: ${sk.map(shownNum).join(', ')}` : 'Atladığın profil yok.';
 }
+$('#unskip').onclick = () => { SKIP = {}; store.set('skip', SKIP); renderMore(); };
 $('#copyFix').onclick = async () => {
   try { await navigator.clipboard.writeText($('#fixExport').value); $('#copyFix').textContent = 'Kopyalandı ✓'; }
   catch (e) { $('#fixExport').select(); }
@@ -616,4 +843,4 @@ $('#offlineBtn').onclick = async () => {
 
 /* ---------------- Başlat ---------------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-loadData().then(() => { fillRanges(); renderQuizStats(); }).catch(e => { $('#status').textContent = 'Veri yüklenemedi'; console.error(e); });
+loadData().then(() => { initEzberSettings(); ezHome(); }).catch(e => { $('#status').textContent = 'Veri yüklenemedi'; console.error(e); });

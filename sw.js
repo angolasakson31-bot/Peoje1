@@ -1,6 +1,6 @@
 // Önce önbellek: uygulama ve profil resimleri bir kez indirildikten sonra internetsiz çalışır.
-const CACHE = 'profil-v1';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'data/profiles.json'];
+const CACHE = 'profil-v2';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.json', 'icon.svg', 'data/profiles.json', 'data/similar.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -16,7 +16,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return;
-  const isShell = !url.pathname.includes('/data/') || url.pathname.endsWith('profiles.json');
+  const isShell = !url.pathname.includes('/data/') || url.pathname.endsWith('.json');
   if (isShell) {
     // uygulama dosyaları: internet varsa yenisini al, yoksa önbellekten
     e.respondWith(fetch(e.request).then(r => {

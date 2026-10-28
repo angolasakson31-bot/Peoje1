@@ -60,3 +60,34 @@ dialog .close{float:right;background:var(--line);color:var(--ink);padding:6px 10
 .feedback{font-size:18px;font-weight:700;text-align:center;margin:10px 0;min-height:1.4em}
 .feedback.ok{color:var(--ok)}.feedback.bad{color:var(--bad)}
 h2{font-size:17px;margin:20px 0 6px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;text-align:center}
+.stat b{display:block;font-size:26px}.stat span{color:var(--muted);font-size:13px}
+details.card summary{cursor:pointer}
+details label{display:block;margin:10px 0;font-size:14px;color:var(--muted)}
+details label select{margin-top:4px}
+label.chk{display:flex;gap:8px;align-items:center;color:var(--ink)}
+.tag{display:inline-block;background:#dbeafe;color:#1e40af;font-weight:700;font-size:12px;padding:3px 8px;border-radius:6px}
+canvas.pic{display:block;background:#fff;border-radius:8px;object-fit:contain}
+canvas.big{width:100%;max-height:260px;object-fit:contain;margin:6px auto}
+canvas.small{width:100%;height:70px;object-fit:contain}
+.variants{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.alikes{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px}
+.alike{background:var(--bg);border-radius:8px;padding:4px;text-align:center}
+.card .note{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;margin-top:4px;background:var(--card);color:var(--ink)}
+button.go{width:100%;margin-top:10px}
+button.back,button.wide{width:100%;margin-top:8px}
+.qhead{display:flex;justify-content:space-between;align-items:center}
+.timer{font-variant-numeric:tabular-nums;color:var(--muted)}
+.numIn{font-size:28px!important;text-align:center;letter-spacing:3px}
+.idk{width:100%}
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:center;margin:8px 0}
+.grades{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.grades button{padding:12px 4px}
+button.okbtn{background:var(--ok)}
+.center{text-align:center}
+.res .rk{font-weight:800;color:var(--muted);width:22px;text-align:center}
+@media (prefers-color-scheme: dark){ canvas.pic{filter:invert(1) hue-rotate(180deg)} }
+.row input{min-width:0}
+.row .chkBtn{flex:0 0 auto}
+button.skip{width:100%;margin-top:8px}
