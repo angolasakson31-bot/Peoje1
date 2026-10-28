@@ -1,0 +1,62 @@
+:root{
+  --bg:#f3f4f6; --card:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+  --accent:#2563eb; --ok:#16a34a; --bad:#dc2626; --head:#1f2937;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0b1220; --card:#151d2e; --ink:#e5e7eb; --muted:#9ca3af; --line:#273248; --head:#0f172a; }
+  .pic, .rowimg{ filter: invert(1) hue-rotate(180deg); }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--head);color:#fff;padding:10px 16px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:18px;margin:0}
+#status{font-size:12px;opacity:.8}
+main{padding:12px 16px 90px;max-width:720px;margin:0 auto}
+.view{display:none}.view.active{display:block}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;background:none;color:var(--muted);font-size:22px;padding:8px 0;display:flex;flex-direction:column;align-items:center}
+nav button span{font-size:12px}
+nav button.active{color:var(--accent)}
+button,.bigbtn,select,input[type=search]{font:inherit}
+button{border:0;border-radius:10px;padding:12px 16px;background:var(--accent);color:#fff;font-weight:600}
+button.secondary{background:var(--line);color:var(--ink)}
+button.danger{background:var(--bad)}
+.bigbtn{display:block;text-align:center;background:var(--accent);color:#fff;border-radius:14px;padding:18px;font-size:20px;font-weight:700;margin:8px 0}
+.linkbtn{display:block;text-align:center;color:var(--accent);padding:6px;margin-bottom:8px}
+.hint{color:var(--muted);margin:4px 0 8px}
+.muted{color:var(--muted);font-size:14px;margin:6px 0}
+.row{display:flex;gap:8px;margin:8px 0}.row>*{flex:1}.row.wrap{flex-wrap:wrap}
+select,input[type=search],textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+#cropStage{position:relative;touch-action:none;user-select:none;margin-top:8px}
+#photoCanvas{width:100%;display:block;border-radius:8px}
+#cropBox{position:absolute;border:2px solid #facc15;box-shadow:0 0 0 9999px rgba(0,0,0,.45)}
+#cropBox .h{position:absolute;width:28px;height:28px;background:#facc15;border-radius:50%}
+.h.tl{left:-14px;top:-14px}.h.tr{right:-14px;top:-14px}.h.bl{left:-14px;bottom:-14px}.h.br{right:-14px;bottom:-14px}
+#cropWrap{overflow:hidden}
+.dbg canvas{width:100%;image-rendering:pixelated;background:#000}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0}
+.res{display:flex;align-items:center;gap:10px}
+.res .pic{width:120px;height:72px;object-fit:contain;background:#fff;border-radius:6px}
+.res .num{font-size:22px;font-weight:800}
+.res .sc{color:var(--muted);font-size:13px}
+.res button{margin-left:auto;padding:10px 12px}
+.badge{display:inline-block;font-size:11px;padding:2px 6px;border-radius:6px;background:#fef3c7;color:#92400e;margin-left:4px}
+#list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px;text-align:center}
+.item .pic{width:100%;height:80px;object-fit:contain;background:#fff;border-radius:6px}
+.item b{display:block;font-size:18px}
+.rowimg{width:100%;border-radius:8px;background:#fff}
+dialog{border:0;border-radius:14px;padding:12px;width:min(680px,94vw);background:var(--card);color:var(--ink)}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog .close{float:right;background:var(--line);color:var(--ink);padding:6px 10px}
+#quizCard .pic{width:100%;max-height:240px;object-fit:contain;background:#fff;border-radius:10px}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.opts button{font-size:22px;padding:16px;background:var(--card);color:var(--ink);border:2px solid var(--line)}
+.opts button.ok{border-color:var(--ok);background:#dcfce7;color:#14532d}
+.opts button.bad{border-color:var(--bad);background:#fee2e2;color:#7f1d1d}
+.opts .picopt{padding:4px;background:#fff}
+.opts .picopt img{width:100%;height:90px;object-fit:contain}
+.bignum{font-size:44px;font-weight:800;text-align:center;margin:10px 0}
+.feedback{font-size:18px;font-weight:700;text-align:center;margin:10px 0;min-height:1.4em}
+.feedback.ok{color:var(--ok)}.feedback.bad{color:var(--bad)}
+h2{font-size:17px;margin:20px 0 6px}

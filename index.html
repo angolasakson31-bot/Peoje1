@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>Profil Tanıma</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Profil Tanıma</h1>
+  <span id="status"></span>
+</header>
+
+<main>
+  <!-- KAMERA -->
+  <section id="view-camera" class="view active">
+    <p class="hint">Profilin ucunu <b>tam karşıdan</b> çek. Sonra çerçeveyi kesitin etrafına daralt.</p>
+    <label class="bigbtn">
+      📷 Fotoğraf çek
+      <input id="camInput" type="file" accept="image/*" capture="environment" hidden>
+    </label>
+    <label class="linkbtn">
+      Galeriden seç
+      <input id="galInput" type="file" accept="image/*" hidden>
+    </label>
+    <div id="cropWrap" hidden>
+      <div id="cropStage">
+        <canvas id="photoCanvas"></canvas>
+        <div id="cropBox"><span class="h tl"></span><span class="h tr"></span><span class="h bl"></span><span class="h br"></span></div>
+      </div>
+      <div class="row">
+        <button id="rotBtn" class="secondary">↻ Döndür</button>
+        <button id="matchBtn">🔍 Tanı</button>
+      </div>
+      <details class="dbg"><summary>Kenar görüntüsü</summary><canvas id="edgeCanvas"></canvas></details>
+    </div>
+    <div id="results"></div>
+  </section>
+
+  <!-- EZBER -->
+  <section id="view-quiz" class="view">
+    <div class="row wrap">
+      <select id="quizMode">
+        <option value="pic2num">Resim → numara seç</option>
+        <option value="num2pic">Numara → resim seç</option>
+        <option value="type">Resim → numara yaz</option>
+      </select>
+      <select id="quizRange">
+        <option value="all">Bütün profiller</option>
+      </select>
+    </div>
+    <div id="quizStats" class="muted"></div>
+    <div id="quizCard"></div>
+  </section>
+
+  <!-- LİSTE -->
+  <section id="view-list" class="view">
+    <input id="search" type="search" inputmode="numeric" placeholder="Numara ara (ör. 9101)">
+    <div id="listInfo" class="muted"></div>
+    <div id="list"></div>
+  </section>
+
+  <!-- AYARLAR -->
+  <section id="view-more" class="view">
+    <h2>Çevrimdışı kullanım</h2>
+    <p>Bütün resimleri telefona indir, atölyede internet olmadan çalışsın.</p>
+    <button id="offlineBtn">⬇️ Hepsini indir</button>
+    <div id="offlineInfo" class="muted"></div>
+
+    <h2>Düzeltmeler</h2>
+    <p>Yanlış okunmuş numaraları profil sayfasından düzeltebilirsin. Aşağıdaki listeyi kopyalayıp bana gönderirsen kalıcı olarak düzeltirim.</p>
+    <textarea id="fixExport" readonly rows="5"></textarea>
+    <button id="copyFix" class="secondary">Kopyala</button>
+
+    <h2>Öğrenilen fotoğraflar</h2>
+    <p id="learnInfo" class="muted"></p>
+    <button id="clearLearn" class="danger">Öğrenilenleri sil</button>
+  </section>
+</main>
+
+<nav>
+  <button data-view="camera" class="active">📷<span>Tanı</span></button>
+  <button data-view="quiz">🧠<span>Ezber</span></button>
+  <button data-view="list">📋<span>Liste</span></button>
+  <button data-view="more">⚙️<span>Ayarlar</span></button>
+</nav>
+
+<dialog id="detail">
+  <form method="dialog"><button class="close" aria-label="Kapat">✕</button></form>
+  <div id="detailBody"></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
