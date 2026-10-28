@@ -139,10 +139,12 @@ const G = 24;    // kapsama ızgarası
 const NB = 8;    // kenar yönü dilimi (0-180°, 22.5° adım)
 const CFG = { wLearnCh: 0.5, wHog: 0.8, learnBoost: 1.0, edgeFrac: 0.14, wRecall: 0.6, wAspect: 0.5, wStretch: 0.25, angStep: 6, scales: [0.9, 1.0], squash: [1, 0.75, 0.55], wSquash: 0.1, topK: 120 };
 
-function cropGray() {
-  const c = photo.canvas, b = photo.box;
-  const k = c.width / c.clientWidth;
-  const sx = b.x * k, sy = b.y * k, sw = b.w * k, sh = b.h * k;
+function boxRect() {
+  const c = photo.canvas, b = photo.box, k = c.width / c.clientWidth;
+  return [b.x * k, b.y * k, b.w * k, b.h * k];
+}
+function cropGray([sx, sy, sw, sh]) {
+  const c = photo.canvas;
   const s = L / Math.max(sw, sh);
   const W = Math.max(8, Math.round(sw * s)), H = Math.max(8, Math.round(sh * s));
   const t = document.createElement('canvas'); t.width = W; t.height = H;
@@ -355,10 +357,47 @@ function buildQuery(e, dir, angle, W, H) {
   return { W, H, odt, cells, nCells, sample: { xy, ob }, a: W / H, angle, a0: angle > 45 ? angle - 90 : angle };
 }
 
+// Kenar haritasındaki asıl nesnenin sınırları: küçük kopuk parçalar (arka plan) hariç
+function objectBox(e, W, H) {
+  const lab = new Int32Array(W * H), comps = [];
+  const stack = [];
+  for (let i = 0; i < W * H; i++) {
+    if (!e[i] || lab[i]) continue;
+    const id = comps.length + 1, c = { n: 0, x0: W, y0: H, x1: 0, y1: 0 };
+    lab[i] = id; stack.push(i);
+    while (stack.length) {
+      const j = stack.pop(), x = j % W, y = (j / W) | 0;
+      c.n++; if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y < c.y0) c.y0 = y; if (y > c.y1) c.y1 = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const k = yy * W + xx;
+        if (e[k] && !lab[k]) { lab[k] = id; stack.push(k); }
+      }
+    }
+    comps.push(c);
+  }
+  if (!comps.length) return null;
+  const big = Math.max(...comps.map(c => c.n));
+  const keep = comps.filter(c => c.n >= Math.max(15, big * 0.15));
+  return { x0: Math.min(...keep.map(c => c.x0)), y0: Math.min(...keep.map(c => c.y0)), x1: Math.max(...keep.map(c => c.x1)) + 1, y1: Math.max(...keep.map(c => c.y1)) + 1 };
+}
+
 function analyzeCrop() {
-  const { g, W, H } = cropGray();
-  const { e, dir, angle } = edges(g, W, H);
-  return buildQuery(e, dir, angle, W, H);
+  let rect = boxRect();
+  let { g, W, H } = cropGray(rect);
+  let { e, dir, angle } = edges(g, W, H);
+  // çerçeveyi profilin kenarlarına otomatik oturt: çerçeve biraz bol ya da kaymış çizilse de sonuç değişmesin
+  const ob = objectBox(e, W, H);
+  if (ob && ((ob.x1 - ob.x0) < W * 0.92 || (ob.y1 - ob.y0) < H * 0.92)) {
+    const k = rect[2] / W, m = 0.03 * Math.max(ob.x1 - ob.x0, ob.y1 - ob.y0);
+    rect = [rect[0] + (ob.x0 - m) * k, rect[1] + (ob.y0 - m) * k, (ob.x1 - ob.x0 + 2 * m) * k, (ob.y1 - ob.y0 + 2 * m) * k];
+    ({ g, W, H } = cropGray(rect));
+    ({ e, dir, angle } = edges(g, W, H));
+  }
+  const Q = buildQuery(e, dir, angle, W, H);
+  Q.rect = rect;
+  return Q;
 }
 
 // Elle çizilen çizgilerden sorgu: çizgi pikselleri katalog çizimleri gibi nokta olur,
@@ -421,6 +460,9 @@ function rank(Q) {
   // öğretilen fotoğraflarla karşılaştır
   const learned = learnedScores(Q, angles);
   for (const r of res) if (learned.has(r.n) && learned.get(r.n) < r.sc) { r.sc = learned.get(r.n); r.src = 'senin fotoğrafın'; }
+  // katalogda olmayan numaraya öğretilen fotoğraflar da listeye girsin
+  const inRes = new Set(res.map(r => r.n));
+  for (const [n, sc] of learned) if (!inRes.has(n)) res.push({ n, sc, src: 'senin fotoğrafın' });
   res.sort((a, b) => a.sc - b.sc);
   return res;
 }
@@ -520,20 +562,15 @@ function variants(g) {
 }
 const cosine = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
-function cropRect() {
-  const c = photo.canvas;
-  if (trace.strokes.length) {
-    const xs = trace.strokes.flat().map(p => p[0]), ys = trace.strokes.flat().map(p => p[1]);
-    let sx = Math.min(...xs), sy = Math.min(...ys), sw = Math.max(...xs) - sx, sh = Math.max(...ys) - sy;
-    const m = Math.max(sw, sh) * 0.08;
-    return [sx - m, sy - m, sw + 2 * m, sh + 2 * m];
-  }
-  const k = c.width / c.clientWidth, b = photo.box;
-  return [b.x * k, b.y * k, b.w * k, b.h * k];
+function strokesRect() {
+  const xs = trace.strokes.flat().map(p => p[0]), ys = trace.strokes.flat().map(p => p[1]);
+  const sx = Math.min(...xs), sy = Math.min(...ys), sw = Math.max(...xs) - sx, sh = Math.max(...ys) - sy;
+  const m = Math.max(sw, sh) * 0.08;
+  return [sx - m, sy - m, sw + 2 * m, sh + 2 * m];
 }
 // Fotoğraf sorgusuna görünüm imzasını ekle
 function addHog(Q) {
-  const [sx, sy, sw, sh] = cropRect();
+  const [sx, sy, sw, sh] = Q.rect;
   Q.hogBase = hog(deskewGray(photo.canvas, sx, sy, sw, sh, Q.a0));
   Q.hog8 = variants(deskewGray(photo.canvas, sx, sy, sw, sh, Q.a0));
   return Q;
@@ -544,7 +581,7 @@ function learnedScores(Q, angles) {
   const best = new Map();
   for (const s of SAMPLES) {
     let ch = 1e9;
-    for (let o = 0; o < 8; o++) for (const ang of angles) ch = Math.min(ch, scorePlacement(orient(s.pts, s.a, o, ang - s.ang), Q, true));
+    for (let o = 0; o < 8; o++) for (const ang of angles) ch = Math.min(ch, scorePlacement(orient(s.pts, s.a, o, ang - s.ang), Q));
     let sc = ch;
     if (Q.hog8 && s.hog) {
       let c = -1;
@@ -558,7 +595,7 @@ function learnedScores(Q, angles) {
 }
 
 async function saveSample(n, Q) {
-  const rec = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), hog: Q.hogBase || null, thumb: photo.img ? photoThumb() : null, t: Date.now() };
+  const rec = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), hog: Q.hogBase || null, thumb: photo.img && Q.rect ? photoThumb(Q.rect) : null, t: Date.now() };
   rec.id = await idb.put(rec);
   SAMPLES.push({ ...rec, pts: decodePts(rec.p) });
   return samplesOf(n).length;
@@ -610,6 +647,7 @@ enableDrawing(trace.canvas, () => trace.strokes, '#facc15', updateTraceUi);
 // Tanı: çizim varsa çizimden, yoksa çerçevedeki fotoğraftan
 function currentQuery() {
   const Q = trace.strokes.length ? inkQuery(trace.canvas) : analyzeCrop();
+  if (Q && !Q.rect) Q.rect = strokesRect();
   return Q && addHog(Q);
 }
 
@@ -623,6 +661,11 @@ $('#matchBtn').onclick = () => {
     const Q = currentQuery();
     if (!Q) { $('#results').innerHTML = '<p class="muted">Önce kesiti çiz.</p>'; return; }
     lastQuery = Q;
+    // otomatik oturtulan çerçeveyi göster: uygulama tam olarak nereye baktı
+    if (!trace.strokes.length && Q.rect) {
+      const k = photo.canvas.clientWidth / photo.canvas.width, [x, y, w, h] = Q.rect;
+      setBox({ x: x * k, y: y * k, w: w * k, h: h * k });
+    }
     lastRank = rank(Q);
     showResults($('#results'), lastRank, performance.now() - t0, true);
   }, 30);
@@ -630,25 +673,15 @@ $('#matchBtn').onclick = () => {
 
 /* ---------------- Yeni profil ekleme ---------------- */
 let CUSTOM = store.get('custom', []);   // [{n, a, ang, p, thumb}]
-function photoThumb() {
-  // çizim varsa çizimin sınırları, yoksa sarı çerçeve
+function photoThumb([sx, sy, sw, sh]) {
   const c = photo.canvas;
-  let sx, sy, sw, sh;
-  if (trace.strokes.length) {
-    const xs = trace.strokes.flat().map(p => p[0]), ys = trace.strokes.flat().map(p => p[1]);
-    sx = Math.min(...xs); sy = Math.min(...ys); sw = Math.max(...xs) - sx; sh = Math.max(...ys) - sy;
-    const m = Math.max(sw, sh) * 0.08; sx -= m; sy -= m; sw += 2 * m; sh += 2 * m;
-  } else {
-    const k = c.width / c.clientWidth, b = photo.box;
-    sx = b.x * k; sy = b.y * k; sw = b.w * k; sh = b.h * k;
-  }
   const s = 220 / Math.max(sw, sh), t = document.createElement('canvas');
   t.width = Math.max(1, Math.round(sw * s)); t.height = Math.max(1, Math.round(sh * s));
   t.getContext('2d').drawImage(c, sx, sy, sw, sh, 0, 0, t.width, t.height);
   return t.toDataURL('image/jpeg', 0.72);
 }
 function addCustomProfile(n, Q) {
-  const entry = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), thumb: photoThumb() };
+  const entry = { n, a: Q.a, ang: Q.a0, p: encodePts(Q.sample), thumb: photoThumb(Q.rect) };
   CUSTOM = CUSTOM.filter(c => c.n !== n);
   CUSTOM.push(entry);
   store.set('custom', CUSTOM);
