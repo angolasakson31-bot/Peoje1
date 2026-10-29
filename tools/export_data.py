@@ -7,6 +7,9 @@ import base64, json, os, sys
 import numpy as np
 from PIL import Image, ImageFilter
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from imgutil import clean  # noqa: E402
+
 work, dest = sys.argv[1], sys.argv[2]
 info = json.load(open(os.path.join(work, 'out/info.json')))
 # satır türü: draw / text / nodraw (videoda resmi olmayan satırlar elle ve otomatik işaretlendi)
@@ -16,55 +19,27 @@ for n, v in info.items():
 os.makedirs(os.path.join(dest, 'row'), exist_ok=True)
 os.makedirs(os.path.join(dest, 'pic'), exist_ok=True)
 rng = np.random.default_rng(0)
-
-
-def components(mask):
-    """Satır-koşu tabanlı bağlı bileşenler: [(y0, y1, x0, x1, piksel), ...]"""
-    parent = {}
-
-    def find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-    prev, runs = [], []
-    for y in range(mask.shape[0]):
-        d = np.diff(np.concatenate(([0], mask[y].astype(np.int8), [0])))
-        cur = []
-        for s0, e0 in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
-            k = len(runs)
-            runs.append((y, s0, e0))
-            parent[k] = k
-            for pk, ps, pe in prev:
-                if ps < e0 + 1 and s0 < pe + 1:
-                    ra, rb = find(k), find(pk)
-                    if ra != rb:
-                        parent[ra] = rb
-            cur.append((k, s0, e0))
-        prev = cur
-    boxes = {}
-    for k, (y, s0, e0) in enumerate(runs):
-        r = find(k)
-        b = boxes.setdefault(r, [y, y + 1, s0, e0, 0])
-        b[0] = min(b[0], y); b[1] = max(b[1], y + 1); b[2] = min(b[2], s0); b[3] = max(b[3], e0); b[4] += e0 - s0
-    return list(boxes.values())
-
-
-def clean(m):
-    """Ekran çizgilenmesinden kalan küçük lekeleri at, yalnız çizimin büyük parçalarını tut."""
-    cs = components(m)
-    if not cs:
-        return m
-    big = max(c[4] for c in cs)
-    keep = np.zeros_like(m)
-    for y0, y1, x0, x1, npx in cs:
-        if npx >= max(25, 0.15 * big):
-            keep[y0:y1, x0:x1] |= m[y0:y1, x0:x1]
-    ys, xs = np.flatnonzero(keep.any(1)), np.flatnonzero(keep.any(0))
-    if len(ys) == 0:
-        return m
-    return keep[ys[0]:ys[-1] + 1, xs[0]:xs[-1] + 1]
 MAXPTS = 220
+
+
+def encode_mask(m):
+    """Çizgi maskesinden en fazla MAXPTS nokta: konum (0-255) ve kenar yön dilimi (0-7)."""
+    h, w = m.shape
+    # her noktanın kenar yönü (çizginin normali, 0-180° arası 8 dilim)
+    blur = np.asarray(Image.fromarray((m * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5))).astype(np.float32)
+    gy, gx = np.gradient(blur)
+    ys, xs = np.nonzero(m)
+    if len(xs) > MAXPTS:
+        sel = rng.choice(len(xs), MAXPTS, replace=False)
+        xs, ys = xs[sel], ys[sel]
+    ang = np.degrees(np.arctan2(gy[ys, xs], gx[ys, xs])) % 180
+    ob = (np.floor(ang / 22.5).astype(int) % 8).astype(np.uint8)
+    u = np.clip(np.round((xs + 0.5) / w * 255), 0, 255).astype(np.uint8)
+    vv = np.clip(np.round((ys + 0.5) / h * 255), 0, 255).astype(np.uint8)
+    pts = np.stack([u, vv, ob], 1).ravel().tobytes()
+    return dict(a=round(w / h, 4), p=base64.b64encode(pts).decode())
+
+
 profiles = []
 for n in sorted(info, key=lambda s: (int(s), s)):
     v = info[n]
@@ -101,21 +76,29 @@ for n in sorted(info, key=lambda s: (int(s), s)):
         m = clean(raw)
         # netlik puanı: lekelerden arınmış çizimin ham maskeye oranı (düşükse resim bulanık)
         entry['q'] = round(float(m.sum()) / max(int(raw.sum()), 1), 2)
-        h, w = m.shape
-        # her noktanın kenar yönü (çizginin normali, 0-180° arası 8 dilim)
-        blur = np.asarray(Image.fromarray((m * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5))).astype(np.float32)
-        gy, gx = np.gradient(blur)
-        ys, xs = np.nonzero(m)
-        if len(xs) > MAXPTS:
-            sel = rng.choice(len(xs), MAXPTS, replace=False)
-            xs, ys = xs[sel], ys[sel]
-        ang = np.degrees(np.arctan2(gy[ys, xs], gx[ys, xs])) % 180
-        ob = (np.floor(ang / 22.5).astype(int) % 8).astype(np.uint8)
-        u = np.clip(np.round((xs + 0.5) / w * 255), 0, 255).astype(np.uint8)
-        vv = np.clip(np.round((ys + 0.5) / h * 255), 0, 255).astype(np.uint8)
-        pts = np.stack([u, vv, ob], 1).ravel().tobytes()
-        entry['a'] = round(w / h, 4)
-        entry['p'] = base64.b64encode(pts).decode()
+        entry.update(encode_mask(m))
     profiles.append(entry)
+# Atölye panolarından alınan net çizimler (tools/sheets.py çıktısı); videodakinden iyi olduğu için onun yerine geçer
+board = os.path.join(work, 'sheets')
+if len(sys.argv) > 3:
+    board = sys.argv[3]
+if os.path.exists(os.path.join(board, 'items.json')):
+    import shutil
+    os.makedirs(os.path.join(dest, 'board'), exist_ok=True)
+    byn = {p['n']: p for p in profiles}
+    added = 0
+    for it in json.load(open(os.path.join(board, 'items.json'))):
+        n = it['n']
+        shutil.copy(os.path.join(board, f'pic/{n}.jpg'), os.path.join(dest, f'board/{n}.jpg'))
+        e = byn.get(n)
+        if e is None:
+            e = dict(n=n, h=1, r=0)
+            profiles.append(e); byn[n] = e; added += 1
+        e.update(h=1, b=1, s=it['series'])
+        if it['match']:
+            m = clean(np.asarray(Image.open(os.path.join(board, f'mask/{n}.png'))) < 128)
+            e.update(encode_mask(m)); e['q'] = 1
+    print('panodan', added, 'yeni profil')
+
 json.dump(dict(profiles=profiles), open(os.path.join(dest, 'profiles.json'), 'w'), separators=(',', ':'))
 print(len(profiles), 'profil,', sum(p['h'] for p in profiles), 'çizimli')

@@ -41,3 +41,8 @@ birkaç karesini üst üste koyup ekran çizgilenmesini (moiré) temizler.
 - **📸 Öğret:** Tanı sekmesinde fotoğrafı çek, çerçevele, "📸 Öğret"e bas, numarayı yaz. Aynı profilden 2–3 fotoğraf (bir temiz, birkaç normal çekim) öğretmek en iyisi.
 - Yeni çekim, öğretilen fotoğraflarla iki yolla karşılaştırılır: kenar şekli ve HOG görünüm imzası (8 yön).
 - Fotoğraflar telefonda IndexedDB'de saklanır. **Ayarlar → Yedek indir / geri yükle** ile taşınır.
+
+## Atölye panoları
+`tools/sheets.py` atölyedeki profil panolarının fotoğraflarından (Folyolanacak SP1, GSW-17, GSS-17, VG-15, VG-17)
+her çizimi numarasıyla keser; kırmızı numara yazılarını ve parlamaları temizler. `tools/export_data.py <video işi> data <pano çıktısı>`
+bu çizimleri `data/board/` altına koyar: katalogda olan profillerde videodaki bulanık çizimin yerine geçer, olmayanlar yeni profil olarak eklenir.

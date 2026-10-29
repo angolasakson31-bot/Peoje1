@@ -12,8 +12,9 @@ let BYNUM = new Map();
 let FIX = store.get('fix', {});          // yanlış okunan numara düzeltmeleri: {asıl: yeni}
 
 const shownNum = n => FIX[n] || n;
-const picUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : `data/pic/${n}.jpg`; };
-const rowUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : `data/row/${n}.jpg`; };
+// pano çizimi (b) varsa o gösterilir: videodakinden çok daha net
+const picUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : p && p.b ? `data/board/${n}.jpg` : `data/pic/${n}.jpg`; };
+const rowUrl = n => { const p = BYNUM.get(n); return p && p.custom ? p.thumb : p && p.r === 0 ? `data/board/${n}.jpg` : `data/row/${n}.jpg`; };
 
 // Noktalar üçlü baytlar halinde: u, v (0-255) ve kenar yön dilimi (0-7)
 function decodePts(b64) {
@@ -771,6 +772,8 @@ $('#sketchBtn').onclick = () => {
 
 function findByShown(v) {
   for (const p of PROFILES) if (shownNum(p.n) === v) return p;
+  // "19106-38028" gibi çift numaralı profiller numaralardan biriyle de bulunur
+  for (const p of PROFILES) if (shownNum(p.n).split('-').includes(v)) return p;
   return BYNUM.get(v) || BYNUM.get(v.padStart(4, '0'));
 }
 
@@ -813,8 +816,10 @@ function openDetail(n) {
   $('#detailBody').innerHTML = `
     <div class="bignum">${shownNum(n)}</div>
     ${FIX[n] ? `<p class="muted">Videodan okunan: ${n}</p>` : ''}
+    ${p && p.s ? `<p class="muted">Seri: <b>${p.s}</b></p>` : ''}
+    ${p && p.b && p.r !== 0 ? `<img class="rowimg" src="${picUrl(n)}" alt=""><p class="muted">Atölye panosundaki çizimi.</p>` : ''}
     <img class="rowimg" src="${rowUrl(n)}" alt="">
-    <p class="muted">Excel satırının videodan alınmış hali.</p>
+    <p class="muted">${p && p.r === 0 ? 'Atölye panosundaki çizimi.' : 'Excel satırının videodan alınmış hali.'}</p>
     ${mine.length ? `<p class="muted">Öğrettiğin fotoğraflar (${mine.length}):</p><div class="alikes" id="detMine"></div>` : '<p class="muted">Bu profile henüz fotoğraf öğretmedin. Tanı sekmesinde fotoğrafı çekip "📸 Öğret"e bas.</p>'}
     ${NOTES[n] ? `<p>İpucun: ${NOTES[n]}</p>` : ''}
     ${p && p.h && lookalikes(n, 4).length ? '<p class="muted">Buna en çok benzeyenler:</p><div class="alikes" id="detAlikes"></div>' : ''}
@@ -887,7 +892,8 @@ const studyPool = () => PROFILES.filter(p => p.h && !SKIP[p.n]);
 
 function newCandidates() {
   const r = EZ.range;
-  let list = studyPool().filter(p => !SRS[p.n] && (r === 'all' || shownNum(p.n).padStart(4, '0')[0] === r));
+  const inRange = p => r === 'all' || (r.startsWith('s:') ? p.s === r.slice(2) : shownNum(p.n).padStart(4, '0')[0] === r);
+  let list = studyPool().filter(p => !SRS[p.n] && inRange(p));
   if (EZ.order === 'random') {
     // her gün aynı karışık sıra (sayfa yenilense de değişmesin)
     const seed = s => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return h; };
@@ -1048,7 +1054,7 @@ function introduce(p) {
       <div class="variants"></div>
       <p class="muted">Bunlarla karıştırma:</p>
       <div class="alikes"></div>
-      <p class="muted">Excel'deki satırı:</p><img class="rowimg" src="${rowUrl(p.n)}" alt="">
+      ${p.r === 0 ? '' : `<p class="muted">Excel'deki satırı:</p><img class="rowimg" src="${rowUrl(p.n)}" alt="">`}${p.s ? `<p class="muted">Seri: <b>${p.s}</b></p>` : ''}
       <label class="muted">Hafıza ipucun (isteğe bağlı): <input class="note" type="text" placeholder="ör. 'iki dişli tarak, 91 ile başlar'" value="${(NOTES[p.n] || '').replace(/"/g, '&quot;')}"></label>
       <button class="go">Tamam, sor bakalım</button>
       <button class="secondary skip">Resim bozuk, bu profili atla</button>
@@ -1142,7 +1148,8 @@ function ask(p) {
       <button class="secondary idk">Bilmiyorum</button>`;
     const inp = box.querySelector('input');
     const norm = v => v.trim().replace(/^0+/, '');
-    const check = () => { if (inp.disabled) return; inp.disabled = true; const v = inp.value.trim(); finish(!!v && norm(v) === norm(answer), v); };
+    const ok = v => norm(v) === norm(answer) || answer.split('-').some(a => norm(a) === norm(v));
+    const check = () => { if (inp.disabled) return; inp.disabled = true; const v = inp.value.trim(); finish(!!v && ok(v), v); };
     box.querySelector(".chkBtn").onclick = check;
     box.querySelector('.idk').onclick = () => { inp.value = ''; check(); };
     inp.onkeydown = e => { if (e.key === 'Enter') check(); };
@@ -1156,6 +1163,10 @@ function initEzberSettings() {
   for (const p of studyPool()) { const k = shownNum(p.n).padStart(4, '0')[0]; groups.set(k, (groups.get(k) || 0) + 1); }
   const sel = $('#ezRange');
   for (const [k, c] of [...groups].sort()) sel.insertAdjacentHTML('beforeend', `<option value="${k}">${k}000 – ${k}999 (${c})</option>`);
+  // atölye panolarındaki seriler
+  const series = new Map();
+  for (const p of studyPool()) if (p.s) series.set(p.s, (series.get(p.s) || 0) + 1);
+  for (const [k, c] of [...series].sort()) sel.insertAdjacentHTML('beforeend', `<option value="s:${k}">Pano: ${k} (${c})</option>`);
   for (const [id, key] of [['#ezNew', 'newPerDay'], ['#ezAnswer', 'answer'], ['#ezOrder', 'order'], ['#ezRange', 'range']]) {
     const el = $(id); el.value = String(EZ[key]);
     el.onchange = () => { EZ[key] = key === 'newPerDay' ? +el.value : el.value; store.set('ezberSet', EZ); ezHome(); };
